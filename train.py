@@ -16,12 +16,16 @@ import json
 import argparse
 from einops import rearrange, repeat, reduce, pack, unpack
 import math
+from transformers import CLIPTokenizer, CLIPTextModel
+import time
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--debug', action='store_true')
+parser.add_argument('--text', action='store_true')
 parser.add_argument('--lrate', default=1e-4, type=float)
 parser.add_argument('--test_size', default=1.4, type=float)
 parser.add_argument('--alpha', default=1500, type=int)
@@ -34,9 +38,15 @@ parser.add_argument('--n_sample', default=64, type=int)
 parser.add_argument('--n_epoch', default=100, type=int)
 parser.add_argument('--experiment', default="H32-train1", type=str)
 parser.add_argument('--remove_node', default="010", type=str)
+<<<<<<< Updated upstream
 parser.add_argument('--type_attention', default="", type=str)
+=======
+parser.add_argument('--type_attention', default="1", type=str)
+#parser.add_argument('--type_attention', default="self", type=str)
+>>>>>>> Stashed changes
 parser.add_argument('--pixel_size', default=28, type=int)
-parser.add_argument('--save_model', default=1, type=int)
+parser.add_argument('--save_model', default=0, type=int)
+#parser.add_argument('--save_model', default=1, type=int)
 parser.add_argument('--dataset', default="single-body_2d_3classes", type=str)
 
 
@@ -163,7 +173,6 @@ class Attention(nn.Module):
         )
 
     def forward(self, x, mask = None, attn_bias = None):
-        print(x.shape)
         b, n, device = *x.shape[:2], x.device
 
         x = self.norm(x)
@@ -336,9 +345,15 @@ class EmbedFC(nn.Module):
 
 
 class ContextUnet(nn.Module):
-    def __init__(self, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1):
+    def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1):
         super(ContextUnet, self).__init__()
-
+        self.text = text
+        if text:
+            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+            self.transformer = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").eval()
+            self.max_length = 77
+            for param in self.transformer.parameters():
+                param.requires_grad = False
         self.in_channels = in_channels
         self.n_contexts = len(n_classes)
         self.n_feat = 2 * n_feat
@@ -384,7 +399,6 @@ class ContextUnet(nn.Module):
 
     def forward(self, x, c, t, context_mask):
         # x is (noisy) image, c is context label, t is timestep, 
-
         x = self.init_conv(x)
         down1 = self.down1(x)
         down2 = self.down2(down1)
@@ -394,14 +408,21 @@ class ContextUnet(nn.Module):
         temb2 = self.timeembed2(t).view(-1, int(self.n_feat/2), 1, 1)
 
         # embed context, time step
-        cemb1 = 0
-        cemb2 = 0
-        for ic in range(len(self.n_classes)):
-            tmpc = c[ic]
-            if tmpc.dtype==torch.int64: 
-                tmpc = nn.functional.one_hot(tmpc, num_classes=self.n_classes[ic]).type(torch.float)
-            cemb1 += self.contextembed1[ic](tmpc).view(-1, int(self.n_out1/1.), 1, 1)
-            cemb2 += self.contextembed2[ic](tmpc).view(-1, int(self.n_out2/1.), 1, 1)
+        if self.text:
+            batch_encoding = self.tokenizer(c, truncation=True, max_length=self.max_length, return_length=True,
+                                        return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
+            tokens = batch_encoding["input_ids"].to(device)
+            outputs = self.transformer(input_ids=tokens)
+            cemb = outputs.last_hidden_state
+        else:
+            cemb1 = 0
+            cemb2 = 0
+            for ic in range(len(self.n_classes)):
+                tmpc = c[ic]
+                if tmpc.dtype==torch.int64: 
+                    tmpc = nn.functional.one_hot(tmpc, num_classes=self.n_classes[ic]).type(torch.float)
+                cemb1 += self.contextembed1[ic](tmpc).view(-1, int(self.n_out1/1.), 1, 1)
+                cemb2 += self.contextembed2[ic](tmpc).view(-1, int(self.n_out2/1.), 1, 1)
 
 
         up1 = self.up0(hiddenvec)
@@ -441,8 +462,9 @@ def ddpm_schedules(beta1, beta2, T):
 
 
 class DDPM(nn.Module):
-    def __init__(self, nn_model, betas, n_T, device, drop_prob=0.1, n_classes=None, flag_weight=0):
+    def __init__(self, text, nn_model, betas, n_T, device, drop_prob=0.1, n_classes=None, flag_weight=0):
         super(DDPM, self).__init__()
+        self.text = text
         self.nn_model = nn_model.to(device)
         self.n_classes = n_classes
 
@@ -459,7 +481,6 @@ class DDPM(nn.Module):
         """
         this method is used in training, so samples t and noise randomly
         """
-
         _ts = torch.randint(1, self.n_T+1, (x.shape[0],)).to(self.device)  # t ~ Uniform(0, n_T)
         noise = torch.randn_like(x)  # eps ~ N(0, 1)
 
@@ -469,7 +490,8 @@ class DDPM(nn.Module):
         )  
 
         # dropout context with some probability
-        context_mask = torch.bernoulli(torch.zeros_like(c[0])+self.drop_prob).to(self.device)
+        context_mask = torch.bernoulli((torch.zeros(len(c)).to(self.device) if self.text else torch.zeros_like(c[0])) \
+                                       +self.drop_prob).to(self.device)
         
         return self.loss_mse(noise, self.nn_model(x_t, c, _ts / self.n_T, context_mask))
 
@@ -503,7 +525,8 @@ class DDPM(nn.Module):
 
 
 def training(args):
-
+    print('start')
+    start_time = time.time()
     n_epoch = args.n_epoch 
     batch_size = args.batch_size 
     n_T = args.n_T 
@@ -540,28 +563,28 @@ def training(args):
     tf = transforms.Compose([transforms.Resize((pixel_size,pixel_size)), transforms.ToTensor()])
 
 
-    save_dir = './output/'+dataset+'/'+experiment+'/'
+    save_dir = f'./output{"_dbg" if args.debug else ""}/'+f'{dataset}{"_txt" if args.text else ""}'+'/'+experiment+'/'
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
     save_dir = save_dir + str(num_samples)+"_"+str(test_size)+"_"+str(n_feat)+"_"+str(n_T)+"_"+str(n_epoch)+"_"+str(lrate)+"_"+remove_node+"_"+str(alpha)+"_"+str(beta)+"_"+str(type_attention)+"/"
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
 
-    ddpm = DDPM(nn_model=ContextUnet(in_channels=in_channels, n_feat=n_feat, n_classes=n_classes, dataset=dataset, type_attention=type_attention), 
+    ddpm = DDPM(text=args.text, nn_model=ContextUnet(text=args.text, in_channels=in_channels, n_feat=n_feat, n_classes=n_classes, dataset=dataset, type_attention=type_attention), 
                                      betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
     ddpm.to(device)
+    print('model', time.time() - start_time)
 
-
-    train_dataset = load_dataset.my_dataset(tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
+    train_dataset = load_dataset.my_dataset(args.text, tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1)
-
+    print('train', time.time() - start_time)
 
     test_dataloaders = {}
     log_dict = {'train_loss_per_batch': [],
                 'test_loss_per_batch': {key: [] for key in configs["test"]}}
     output_configs = list(set(configs["test"] + configs["train"])) 
     for config in output_configs: 
-        test_dataset = load_dataset.my_dataset(tf, n_sample, dataset, configs=config, training=False, test_size=test_size) 
+        test_dataset = load_dataset.my_dataset(args.text, tf, n_sample, dataset, configs=config, training=False, test_size=test_size) 
         test_dataloaders[config] = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
-
+    print('test', time.time() - start_time)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
 
     for ep in range(n_epoch):
@@ -575,9 +598,10 @@ def training(args):
         loss_ema = None
         pbar = tqdm(train_dataloader)
         for x, c in pbar:
+            #print('train batch', time.time() - start_time)
             optim.zero_grad()
             x = x.to(device)
-            _c = [tmpc.to(device) for tmpc in c.values()]
+            _c = c if args.text else [tmpc.to(device) for tmpc in c.values()]
             loss = ddpm(x, _c)
             log_dict['train_loss_per_batch'].append(loss.item())
             loss.backward()
@@ -599,17 +623,17 @@ def training(args):
                     test_loss = ddpm(test_x, _test_c)
                     log_dict['test_loss_per_batch'][test_config].append(test_loss.item())
 
-        if save_model==0 and (ep + 1) % 10 == 0: 
-            for test_config in output_configs: 
-                x_real, c_gen = next(iter(test_dataloaders[test_config]))
-                x_real = x_real[:n_sample].to(device)
-                x_gen, x_gen_store = ddpm.sample(n_sample, c_gen, (in_channels, pixel_size, pixel_size), device, guide_w=0.0)
-                np.savez_compressed(save_dir + f"image_"+test_config+"_ep"+str(ep)+".npz", x_gen=x_gen.detach().cpu().numpy()) 
-                print('saved image at ' + save_dir + f"image_"+test_config+"_ep"+str(ep)+".png")
+            if save_model==0 and (ep + 1) % 10 == 0: 
+                for test_config in output_configs: 
+                    x_real, c_gen = next(iter(test_dataloaders[test_config]))
+                    x_real = x_real[:n_sample].to(device)
+                    x_gen, x_gen_store = ddpm.sample(n_sample, c_gen, (in_channels, pixel_size, pixel_size), device, guide_w=0.0)
+                    np.savez_compressed(save_dir + f"image_"+test_config+"_ep"+str(ep)+".npz", x_gen=x_gen.detach().cpu().numpy()) 
+                    print('saved image at ' + save_dir + f"image_"+test_config+"_ep"+str(ep)+".png")
 
-                if ep + 1 == n_epoch: 
-                    np.savez_compressed(save_dir + f"gen_store_"+test_config+"_ep"+str(ep)+".npz", x_gen_store=x_gen_store)
-                    print('saved image file at ' + save_dir + f"gen_store_"+test_config+"_ep"+str(ep)+".npz")
+                    if ep + 1 == n_epoch: 
+                        np.savez_compressed(save_dir + f"gen_store_"+test_config+"_ep"+str(ep)+".npz", x_gen_store=x_gen_store)
+                        print('saved image file at ' + save_dir + f"gen_store_"+test_config+"_ep"+str(ep)+".npz")
 
 
         if ep == int(n_epoch-1):
@@ -620,6 +644,9 @@ def training(args):
 
 if __name__ == "__main__":
     args = parser.parse_args()
+    print("Arguments:")
+    for k, v in vars(args).items():
+        print(f"\t{k}: {v}")
     training(args)
 
 

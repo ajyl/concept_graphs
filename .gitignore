@@ -1,0 +1,7 @@
+*pycache*
+*.zip*
+*.txt
+input/
+output*/
+wget*
+slurm

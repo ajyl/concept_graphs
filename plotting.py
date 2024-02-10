@@ -8,9 +8,9 @@ from matplotlib import cm
 import glob
 import matplotlib
 import linear_classifier_3classes
-import mlp_classifier_4classes
+#import mlp_classifier_4classes
 import torch
-import seaborn as sns
+#import seaborn as sns
 from matplotlib.offsetbox import AnchoredText
 import matplotlib.image as mpimg
 from torchvision import models, transforms
@@ -19,13 +19,14 @@ import pandas as pd
 from sklearn.metrics import log_loss
 font = {'size': 15}
 matplotlib.rc('font', **font)
-cp = sns.color_palette("colorblind")
+#cp = sns.color_palette("colorblind")
 criterion = nn.CrossEntropyLoss()
 
 
 pixel_size = 28
 INPUT_DIM = pixel_size * pixel_size * 3
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cpu'
+#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 n_class_color = 2
 
 scale_factor = 78
@@ -72,19 +73,22 @@ def calc_acc(preds, obs, classifier, nclasses=3):
 
 
 def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="output/"):
-
+    """
     properties_json = "properties_"+dataset+".json"
     with open(properties_json, 'r') as f: 
         properties = json.load(f)
-
+    """
     classifier_linear = linear_classifier_3classes.MLP(INPUT_DIM, [2,n_class_color,2,2])
-    classifier_linear.load_state_dict(torch.load("working/linear-classifier_"+dataset+"_multi-class.pt", map_location=torch.device(device)))
+    #classifier_linear.load_state_dict(torch.load("working/linear-classifier_"+dataset+"_multi-class.pt", map_location=torch.device(device)))
     
 
     in_dir = prefix_dir+dataset+"/"+experiment+"/"+param+"/"
     out_dir = prefix_dir+dataset+"/"+experiment+"/"+param+"_"
     
-    eps = range(100) 
+    #eps = range(100) 
+    eps = [99]
+    with open("config_category.json", 'r') as f:
+        configs = json.load(f)
     accs = {test_config: [] for test_config in configs[experiment]["test"] + configs[experiment]["train"]}
     losses = {test_config: [] for test_config in configs[experiment]["test"] + configs[experiment]["train"]}
     preds = {test_config: [] for test_config in configs[experiment]["test"] + configs[experiment]["train"]}
@@ -94,10 +98,14 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
         x_real_plot = {}
         x_gen_plot = {}
         for itest_config, test_config in enumerate(configs[experiment]["test"] + configs[experiment]["train"]): 
-            template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
+            if 'celeba' in dataset:
+                template_path = glob.glob('input/'+dataset+'/test/celeba_'+test_config+'_00*.jpg')
+            else:
+                #template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
+                template_path = glob.glob('input/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
             x_real = Image.open(template_path[0])
             x_real = tf(x_real).detach().numpy()
-            img_path = in_dir+"/image_"+test_config+"_ep"+str(ep)+".npz" 
+            img_path = in_dir+"image_"+test_config+"_ep"+str(ep)+".npz" 
             x_gen = np.load(img_path)["x_gen"]
             x_gen = np.clip(x_gen, 0, 1)
             pred, acc = calc_acc(x_gen, test_config, classifier_linear)
@@ -111,9 +119,12 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
         gen_plots.append(x_gen_plot)
     #print(preds["111"])
 
-    sampled_eps = np.arage(0, 100, 10)
+    #sampled_eps = np.arange(0, 100, 10)
+    #sampled_eps = [99]
+    sampled_eps = eps
     fig, axes = plt.subplots(ncols=len(sampled_eps)+1, nrows=len(configs[experiment]["test"]), sharex=True,sharey=True,
-                             figsize=(1.5*len(sampled_eps), 1.5*len(configs[experiment]["test"])), gridspec_kw = {'wspace':0., 'hspace':0.1})
+                             figsize=(1.5*len(sampled_eps), 1.5*len(configs[experiment]["test"])), 
+                             gridspec_kw = {'wspace':0., 'hspace':0.1})
     for itest_config, test_config in enumerate(configs[experiment]["test"]): 
         axes[itest_config,0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
     for iep, ep in enumerate(sampled_eps): 
@@ -126,7 +137,7 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             ax.spines['top'].set_color('#dddddd') 
             ax.spines['right'].set_color('#dddddd') 
             ax.spines['left'].set_color('#dddddd') 
-    plt.savefig(in_dir+"gen_learning.png", bbox_inches='tight', pad_inches=0.03), plt.close()
+    plt.savefig(in_dir+"gen_learning{}{}.png".format('_celeba_' if 'celeba' in dataset else '', f'_{ep}' if ep != 99 else ''), bbox_inches='tight', pad_inches=0.03), plt.close()
     print(in_dir+"gen_learning.png")
 
 
@@ -163,6 +174,10 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
 
 if __name__ == '__main__': 
 
-    learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_1_1_256_500_100_0.0001_010_1500_2.0_0_1_2_1_1")
+    #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_1_1_256_500_100_0.0001_010_1500_2.0_0_1_2_1_1")
+    #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
+    #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
+    #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
+    learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
 
 
