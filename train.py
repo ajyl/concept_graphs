@@ -38,12 +38,7 @@ parser.add_argument('--n_sample', default=64, type=int)
 parser.add_argument('--n_epoch', default=100, type=int)
 parser.add_argument('--experiment', default="H32-train1", type=str)
 parser.add_argument('--remove_node', default="010", type=str)
-<<<<<<< Updated upstream
 parser.add_argument('--type_attention', default="", type=str)
-=======
-parser.add_argument('--type_attention', default="1", type=str)
-#parser.add_argument('--type_attention', default="self", type=str)
->>>>>>> Stashed changes
 parser.add_argument('--pixel_size', default=28, type=int)
 parser.add_argument('--save_model', default=0, type=int)
 #parser.add_argument('--save_model', default=1, type=int)
