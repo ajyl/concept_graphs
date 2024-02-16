@@ -49,7 +49,7 @@ parser.add_argument('--dataset', default="single-body_2d_3classes", type=str)
 
 class ResidualConvBlock(nn.Module):
     def __init__(
-        self, in_channels: int, out_channels: int, is_res: bool = False
+        self, in_channels: int, out_channels: int, is_res: bool = False, t_emb = None
     ) -> None:
         super().__init__()
         '''
@@ -67,10 +67,17 @@ class ResidualConvBlock(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.GELU(),
         )
+        if t_emb is not None:
+            self.time = nn.Sequential(
+            nn.Linear(in_features=t_emb, out_features=out_channels),
+            nn.GELU(),
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t_emb=None) -> torch.Tensor:
         if self.is_res:
             x1 = self.conv1(x)
+            if t_emb is not None:
+                x1 += self.time(t_emb)[:,:,None,None]
             x2 = self.conv2(x1)
             # this adds on correct residual in experiment channels have increased
             if self.same_channels:
@@ -80,6 +87,8 @@ class ResidualConvBlock(nn.Module):
             return out
         else:
             x1 = self.conv1(x)
+            if t_emb is not None:
+                x1 += self.time(t_emb)[:,:,None,None]
             x2 = self.conv2(x1)
             return x2
 
@@ -95,19 +104,19 @@ class Residual(nn.Module):
         super().__init__()
         self.fn = fn
 
-    def forward(self, x, **kwargs):
-        return self.fn(x, **kwargs) + x
+    def forward(self, x, context=None):
+        return self.fn(x, context) + x
 
 class RearrangeToSequence(nn.Module):
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
 
-    def forward(self, x):
+    def forward(self, x, context=None):
         x = rearrange(x, 'b c ... -> b ... c')
         x, ps = pack([x], 'b * c')
 
-        x = self.fn(x)
+        x = self.fn(x, context)
 
         x, = unpack(x, ps, 'b * c')
         x = rearrange(x, 'b ... c -> b c ...')
@@ -274,50 +283,64 @@ class CrossAttention(nn.Module):
 
 # Define the U-Net downsampling and upsampling components
 class UnetDown(nn.Module):
-    def __init__(self, in_channels, out_channels, type_attention):
+    def __init__(self, in_channels, out_channels, type_attention, text = False):
         super(UnetDown, self).__init__()
         '''
         process and downscale the image feature maps
         '''
+        self.text = text
         layers = [ResidualConvBlock(in_channels, out_channels), nn.MaxPool2d(2)]
         attention = nn.Identity()
         if type_attention=='self':  
             create_self_attn = lambda dim: RearrangeToSequence(Residual(Attention(dim)))
             attention = create_self_attn(out_channels)
-        if type_attention=='cross':  
-            create_self_attn = lambda dim: RearrangeToSequence(Residual(CrossAttention(dim, dim)))
+        if type_attention=='cross' or self.text:  
+            create_self_attn = lambda dim: RearrangeToSequence(Residual(CrossAttention(dim, dim, 
+                                                                        768 if self.text else None)))
             attention = create_self_attn(out_channels)
-        self.model = nn.Sequential(*[ResidualConvBlock(in_channels, out_channels), attention, nn.MaxPool2d(2)])
+        if self.text:
+            self.resblock = ResidualConvBlock(in_channels, out_channels, t_emb=768)
+            self.attn = attention
+            self.pool = nn.MaxPool2d(2)
+        else:
+            self.model = nn.Sequential(*[ResidualConvBlock(in_channels, out_channels), 
+                                         attention, nn.MaxPool2d(2)])
 
-    def forward(self, x):
-        return self.model(x)
-
+    def forward(self, x, t_emb=None, c_emb=None):
+        return self.pool(self.attn(self.resblock(x, t_emb), c_emb)) if self.text else self.model(x)
 
 class UnetUp(nn.Module):
-    def __init__(self, in_channels, out_channels, type_attention):
+    def __init__(self, in_channels, out_channels, type_attention, text = False):
         super(UnetUp, self).__init__()
         '''
         process and upscale the image feature maps
         '''
+        self.text = text
         attention = nn.Identity()
         if type_attention=="self": 
             create_self_attn = lambda dim: RearrangeToSequence(Residual(Attention(dim)))
             attention = create_self_attn(out_channels)
-        if type_attention=="cross": 
-            create_self_attn = lambda dim: RearrangeToSequence(Residual(CrossAttention(dim, dim)))
+        if type_attention=="cross" or self.text: 
+            create_self_attn = lambda dim: RearrangeToSequence(Residual(CrossAttention(dim, dim, 
+                                                                        768 if self.text else None)))
             attention = create_self_attn(out_channels)
         layers = [
             nn.ConvTranspose2d(in_channels, out_channels, 2, 2),
-            ResidualConvBlock(out_channels, out_channels),
+            ResidualConvBlock(out_channels, out_channels, t_emb=768 if self.text else None),
             attention, 
-            ResidualConvBlock(out_channels, out_channels),
+            ResidualConvBlock(out_channels, out_channels, t_emb=768 if self.text else None),
         ]
-        self.model = nn.Sequential(*layers)
+        if self.text:
+            self.layers = nn.ModuleList(layers)
+        else:
+            self.model = nn.Sequential(*layers)
 
-    def forward(self, x, skip):
+    def forward(self, x, skip, t_emb=None, c_emb=None):
         x = torch.cat((x, skip), 1)
-        x = self.model(x)
-        return x
+        if self.text:
+            return self.layers[-1](self.layers[2](self.layers[1](self.layers[0](x), t_emb), c_emb), t_emb) 
+        else:
+            return self.model(x)
 
 
 class EmbedFC(nn.Module):
@@ -342,38 +365,41 @@ class EmbedFC(nn.Module):
 class ContextUnet(nn.Module):
     def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1):
         super(ContextUnet, self).__init__()
-        self.text = text
-        if text:
-            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-            self.transformer = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").eval()
-            self.max_length = 77
-            for param in self.transformer.parameters():
-                param.requires_grad = False
         self.in_channels = in_channels
         self.n_contexts = len(n_classes)
         self.n_feat = 2 * n_feat
         self.n_classes = n_classes
 
         self.init_conv = ResidualConvBlock(in_channels, n_feat, is_res=True)
+        self.text = text
 
-        self.down1 = UnetDown(n_feat, n_feat, type_attention)
-        self.down2 = UnetDown(n_feat, 2 * n_feat, type_attention)
+        self.down1 = UnetDown(n_feat, n_feat, type_attention, self.text)
+        self.down2 = UnetDown(n_feat, 2 * n_feat, type_attention, self.text)
+
+        self.up1 = UnetUp(4 * n_feat, n_feat, type_attention, self.text)
+        self.up2 = UnetUp(2 * n_feat, n_feat, type_attention, self.text)
 
         self.to_vec = nn.Sequential(nn.AvgPool2d(7), nn.GELU())
-
-        self.timeembed1 = EmbedFC(1, 2*n_feat)
-        self.timeembed2 = EmbedFC(1, 1*n_feat)
 
         ### embedding shape
         self.dataset = dataset
         self.n_out1 = 2*n_feat 
         self.n_out2 = n_feat
-
-        self.contextembed1 = []
-        self.contextembed2 = []
-        for iclass in range(len(self.n_classes)):
-            self.contextembed1.append( EmbedFC(self.n_classes[iclass], self.n_out1).to(device) )
-            self.contextembed2.append( EmbedFC(self.n_classes[iclass], self.n_out2).to(device) )
+        if text:
+            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+            self.transformer = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").eval()
+            self.max_length = 77
+            for param in self.transformer.parameters():
+                param.requires_grad = False
+            self.timeembed = EmbedFC(1, 768)
+        else:
+            self.timeembed1 = EmbedFC(1, 2*n_feat)
+            self.timeembed2 = EmbedFC(1, 1*n_feat)
+            self.contextembed1 = []
+            self.contextembed2 = []
+            for iclass in range(len(self.n_classes)):
+                self.contextembed1.append( EmbedFC(self.n_classes[iclass], self.n_out1).to(device) )
+                self.contextembed2.append( EmbedFC(self.n_classes[iclass], self.n_out2).to(device) )
 
 
         n_conv = 7
@@ -383,8 +409,6 @@ class ContextUnet(nn.Module):
             nn.ReLU(),
         )
 
-        self.up1 = UnetUp(4 * n_feat, n_feat, type_attention)
-        self.up2 = UnetUp(2 * n_feat, n_feat, type_attention)
         self.out = nn.Sequential(
             nn.Conv2d(2 * n_feat, n_feat, 3, 1, 1),
             nn.GroupNorm(8, n_feat),
@@ -395,34 +419,35 @@ class ContextUnet(nn.Module):
     def forward(self, x, c, t, context_mask):
         # x is (noisy) image, c is context label, t is timestep, 
         x = self.init_conv(x)
-        down1 = self.down1(x)
-        down2 = self.down2(down1)
-        hiddenvec = self.to_vec(down2)
-
-        temb1 = self.timeembed1(t).view(-1, int(self.n_feat), 1, 1)
-        temb2 = self.timeembed2(t).view(-1, int(self.n_feat/2), 1, 1)
-
-        # embed context, time step
         if self.text:
             batch_encoding = self.tokenizer(c, truncation=True, max_length=self.max_length, return_length=True,
                                         return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
             tokens = batch_encoding["input_ids"].to(device)
             outputs = self.transformer(input_ids=tokens)
             cemb = outputs.last_hidden_state
+            temb = self.timeembed(t)
         else:
-            cemb1 = 0
-            cemb2 = 0
-            for ic in range(len(self.n_classes)):
-                tmpc = c[ic]
-                if tmpc.dtype==torch.int64: 
-                    tmpc = nn.functional.one_hot(tmpc, num_classes=self.n_classes[ic]).type(torch.float)
-                cemb1 += self.contextembed1[ic](tmpc).view(-1, int(self.n_out1/1.), 1, 1)
-                cemb2 += self.contextembed2[ic](tmpc).view(-1, int(self.n_out2/1.), 1, 1)
+            temb1 = self.timeembed1(t).view(-1, int(self.n_feat), 1, 1)
+            temb2 = self.timeembed2(t).view(-1, int(self.n_feat/2), 1, 1)
 
+            # embed context, time step
+            if not self.text:
+                cemb1 = 0
+                cemb2 = 0
+                for ic in range(len(self.n_classes)):
+                    tmpc = c[ic]
+                    if tmpc.dtype==torch.int64: 
+                        tmpc = nn.functional.one_hot(tmpc, num_classes=self.n_classes[ic]).type(torch.float)
+                    cemb1 += self.contextembed1[ic](tmpc).view(-1, int(self.n_out1/1.), 1, 1)
+                    cemb2 += self.contextembed2[ic](tmpc).view(-1, int(self.n_out2/1.), 1, 1)
+        
+        down1 = self.down1(x, temb, cemb) if self.text else self.down1(x)
+        down2 = self.down2(down1, temb, cemb) if self.text else self.down2(down1)
+        hiddenvec = self.to_vec(down2)
 
         up1 = self.up0(hiddenvec)
-        up2 = self.up1(cemb1*up1 + temb1, down2)
-        up3 = self.up2(cemb2*up2+ temb2, down1)
+        up2 = self.up1(up1, down2, temb, cemb) if self.text else self.up1(cemb1*up1 + temb1, down2)
+        up3 = self.up2(up2, down1, temb, cemb) if self.text else self.up2(cemb2*up2+ temb2, down1)
         out = self.out(torch.cat((up3, x), 1))
         return out
 
@@ -494,9 +519,9 @@ class DDPM(nn.Module):
 
         x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1), sample initial noise
          
-        _c_gen = [tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()] 
+        _c_gen = c_gen[:n_sample] if self.text else [tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()] 
 
-        context_mask = torch.zeros_like(_c_gen[0]).to(device)
+        context_mask = torch.zeros(len(_c_gen)).to(self.device) if self.text else torch.zeros_like(_c_gen[0]).to(device)
 
         x_i_store = [] 
         print()
@@ -614,7 +639,7 @@ def training(args):
             for test_config in configs["test"]: 
                 for test_x, test_c in test_dataloaders[test_config]:
                     test_x = test_x.to(device)
-                    _test_c = [tmptest_c.to(device) for tmptest_c in test_c.values()]
+                    _test_c = test_c if args.text else [tmptest_c.to(device) for tmptest_c in test_c.values()]
                     test_loss = ddpm(test_x, _test_c)
                     log_dict['test_loss_per_batch'][test_config].append(test_loss.item())
 
