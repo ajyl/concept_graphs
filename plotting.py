@@ -72,7 +72,7 @@ def calc_acc(preds, obs, classifier, nclasses=3):
     return np.array(preds), np.array(accs)
 
 
-def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="output/"):
+def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="output/", debug=False):
     """
     properties_json = "properties_"+dataset+".json"
     with open(properties_json, 'r') as f: 
@@ -83,6 +83,7 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
     
 
     in_dir = prefix_dir+dataset+"/"+experiment+"/"+param+"/"
+    dataset = dataset.split('_txt')[0]
     out_dir = prefix_dir+dataset+"/"+experiment+"/"+param+"_"
     
     #eps = range(100) 
@@ -103,6 +104,8 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             else:
                 #template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
                 template_path = glob.glob('input/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
+            if debug:
+                template_path = ['Astronaut_Riding_a_Horse_(SDXL).jpg']
             x_real = Image.open(template_path[0])
             x_real = tf(x_real).detach().numpy()
             img_path = in_dir+"image_"+test_config+"_ep"+str(ep)+".npz" 
@@ -116,20 +119,31 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             x_gen = np.transpose(x_gen,(0,2,3,1))
             x_gen_plot[test_config] = np.mean(x_gen, axis=0)
             x_real_plot[test_config] = np.transpose(x_real, (1,2,0))
+            if debug:
+                break
         gen_plots.append(x_gen_plot)
     #print(preds["111"])
 
     #sampled_eps = np.arange(0, 100, 10)
     #sampled_eps = [99]
     sampled_eps = eps
-    fig, axes = plt.subplots(ncols=len(sampled_eps)+1, nrows=len(configs[experiment]["test"]), sharex=True,sharey=True,
-                             figsize=(1.5*len(sampled_eps), 1.5*len(configs[experiment]["test"])), 
+    nrows = 1 if debug else len(configs[experiment]["test"])
+    fig, axes = plt.subplots(ncols=len(sampled_eps)+1, nrows=nrows, sharex=True,sharey=True,
+                             figsize=(1.5*len(sampled_eps), 1.5*nrows), 
                              gridspec_kw = {'wspace':0., 'hspace':0.1})
     for itest_config, test_config in enumerate(configs[experiment]["test"]): 
-        axes[itest_config,0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
+        if debug:
+            axes[0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
+            break
+        else:
+            axes[itest_config,0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
     for iep, ep in enumerate(sampled_eps): 
         for itest_config, test_config in enumerate(configs[experiment]["test"]): 
-            axes[itest_config,iep+1].imshow(gen_plots[iep][test_config], vmin=0, vmax=1)
+            if debug:
+                axes[iep+1].imshow(gen_plots[iep][test_config], vmin=0, vmax=1)
+                break
+            else:
+                axes[itest_config,iep+1].imshow(gen_plots[iep][test_config], vmin=0, vmax=1)
         for ax in fig.axes: 
             ax.set_xticks([])
             ax.set_yticks([])
@@ -137,9 +151,10 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             ax.spines['top'].set_color('#dddddd') 
             ax.spines['right'].set_color('#dddddd') 
             ax.spines['left'].set_color('#dddddd') 
-    plt.savefig(in_dir+"gen_learning{}{}.png".format('_celeba_' if 'celeba' in dataset else '', f'_{ep}' if ep != 99 else ''), bbox_inches='tight', pad_inches=0.03), plt.close()
+    plt.savefig(in_dir+"debug.png" if debug else "gen_learning{}{}.png".format('_celeba_' if 'celeba' in dataset else '', f'_{ep}' if ep != 99 else ''), bbox_inches='tight', pad_inches=0.03), plt.close()
     print(in_dir+"gen_learning.png")
-
+    if debug:
+        sys.exit()
 
 
     lss = ['-', '--', '-.', ':', (5, (10, 3)), '-', '--', '-']
@@ -178,6 +193,7 @@ if __name__ == '__main__':
     #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
     #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
     #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
-    learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
-
+    #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
+    #learning_dynamics("celeba-3classes-10000_txt", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output_dbg/", debug=True)
+    
 

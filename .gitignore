@@ -5,3 +5,4 @@ input/
 output*/
 wget*
 slurm
+*.jpg

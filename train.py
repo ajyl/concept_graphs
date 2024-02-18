@@ -24,6 +24,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--save-every', type=int, default=10)
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--text', action='store_true')
 parser.add_argument('--lrate', default=1e-4, type=float)
@@ -283,7 +284,7 @@ class CrossAttention(nn.Module):
 
 # Define the U-Net downsampling and upsampling components
 class UnetDown(nn.Module):
-    def __init__(self, in_channels, out_channels, type_attention, text = False):
+    def __init__(self, in_channels, out_channels, type_attention, text):
         super(UnetDown, self).__init__()
         '''
         process and downscale the image feature maps
@@ -310,7 +311,7 @@ class UnetDown(nn.Module):
         return self.pool(self.attn(self.resblock(x, t_emb), c_emb)) if self.text else self.model(x)
 
 class UnetUp(nn.Module):
-    def __init__(self, in_channels, out_channels, type_attention, text = False):
+    def __init__(self, in_channels, out_channels, type_attention, text):
         super(UnetUp, self).__init__()
         '''
         process and upscale the image feature maps
@@ -420,11 +421,16 @@ class ContextUnet(nn.Module):
         # x is (noisy) image, c is context label, t is timestep, 
         x = self.init_conv(x)
         if self.text:
+            print(c, type(c), len(c))
             batch_encoding = self.tokenizer(c, truncation=True, max_length=self.max_length, return_length=True,
                                         return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
             tokens = batch_encoding["input_ids"].to(device)
+            print(tokens[:,:10], tokens.dtype, tokens.size())
             outputs = self.transformer(input_ids=tokens)
             cemb = outputs.last_hidden_state
+            print(cemb[:,:10], cemb.dtype, cemb.size())
+            print(self.transformer)
+            sys.exit()
             temb = self.timeembed(t)
         else:
             temb1 = self.timeembed1(t).view(-1, int(self.n_feat), 1, 1)
@@ -542,6 +548,14 @@ class DDPM(nn.Module):
         
         x_i_store = np.array(x_i_store)
         return x_i, x_i_store
+    
+class ConvertToRGB(object):
+    def __call__(self, img):
+        if img.shape[0] == 1:  # Grayscale image
+            img = torch.cat([img, img, img], dim=0)
+        elif img.shape[0] == 4:
+            img = img[:3]  # Drop the alpha channel
+        return img
 
 
 def training(args):
@@ -563,11 +577,12 @@ def training(args):
     n_sample = args.n_sample 
     type_attention = args.type_attention 
     remove_node = args.remove_node 
-    in_channels = 3 if "celeba" in dataset else 4
+    in_channels = 3 if any([x in dataset for x in ["celeba", "astronaut"]]) else 4
 
 
     with open("config_category.json", 'r') as f:
          configs = json.load(f)[experiment]
+    print(configs)
 
 
     experiment_classes = {
@@ -579,8 +594,10 @@ def training(args):
 
     if "celeba" in dataset:
         n_classes = [2,2,2]
-
-    tf = transforms.Compose([transforms.Resize((pixel_size,pixel_size)), transforms.ToTensor()])
+    if "astronaut" in dataset:
+        tf = transforms.Compose([transforms.Resize((pixel_size,pixel_size)), transforms.ToTensor(), ConvertToRGB()])
+    else:
+        tf = transforms.Compose([transforms.Resize((pixel_size,pixel_size)), transforms.ToTensor()])
 
 
     save_dir = f'./output{"_dbg" if args.debug else ""}/'+f'{dataset}{"_txt" if args.text else ""}'+'/'+experiment+'/'
@@ -592,11 +609,9 @@ def training(args):
                                      betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
     ddpm.to(device)
     print('model', time.time() - start_time)
-
     train_dataset = load_dataset.my_dataset(args.text, tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1)
     print('train', time.time() - start_time)
-
     test_dataloaders = {}
     log_dict = {'train_loss_per_batch': [],
                 'test_loss_per_batch': {key: [] for key in configs["test"]}}
@@ -606,7 +621,6 @@ def training(args):
         test_dataloaders[config] = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
     print('test', time.time() - start_time)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
-
     for ep in range(n_epoch):
         print(f'epoch {ep}')
 
@@ -643,7 +657,7 @@ def training(args):
                     test_loss = ddpm(test_x, _test_c)
                     log_dict['test_loss_per_batch'][test_config].append(test_loss.item())
 
-            if save_model==0 and (ep + 1) % 10 == 0: 
+            if save_model==0 and (ep + 1) % args.save_every == 0: 
                 for test_config in output_configs: 
                     x_real, c_gen = next(iter(test_dataloaders[test_config]))
                     x_real = x_real[:n_sample].to(device)
