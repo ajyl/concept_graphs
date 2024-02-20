@@ -18,17 +18,18 @@ from einops import rearrange, repeat, reduce, pack, unpack
 import math
 from transformers import CLIPTokenizer, CLIPTextModel
 import time
+import random
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--save-every', type=int, default=10)
+parser.add_argument('--save-every', type=int, default=100)
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--text', action='store_true')
 parser.add_argument('--lrate', default=1e-4, type=float)
-parser.add_argument('--test_size', default=1.4, type=float)
+parser.add_argument('--test_size', default=1.6, type=float)
 parser.add_argument('--alpha', default=1500, type=int)
 parser.add_argument('--beta', default=2.0, type=float)
 parser.add_argument('--num_samples', default=5000, type=int)
@@ -38,13 +39,12 @@ parser.add_argument('--n_feat', default=256, type=int)
 parser.add_argument('--n_sample', default=64, type=int)
 parser.add_argument('--n_epoch', default=100, type=int)
 parser.add_argument('--experiment', default="H32-train1", type=str)
-parser.add_argument('--remove_node', default="010", type=str)
+parser.add_argument('--remove_node', default="None", type=str)
 parser.add_argument('--type_attention', default="", type=str)
 parser.add_argument('--pixel_size', default=28, type=int)
-parser.add_argument('--save_model', default=0, type=int)
-#parser.add_argument('--save_model', default=1, type=int)
 parser.add_argument('--dataset', default="single-body_2d_3classes", type=str)
-
+parser.add_argument('--scheduler', default="", type=str)
+parser.add_argument('--seed', type=int, default=1)
 
 
 
@@ -80,7 +80,6 @@ class ResidualConvBlock(nn.Module):
             if t_emb is not None:
                 x1 += self.time(t_emb)[:,:,None,None]
             x2 = self.conv2(x1)
-            # this adds on correct residual in experiment channels have increased
             if self.same_channels:
                 out = x + x2
             else:
@@ -140,7 +139,6 @@ class LayerNorm(nn.Module):
         var = torch.var(x, dim = -1, unbiased = False, keepdim = True)
         mean = torch.mean(x, dim = -1, keepdim = True)
         return (x - mean) * (var + eps).rsqrt() * self.g
-
 
 class Attention(nn.Module):
     def __init__(
@@ -237,8 +235,8 @@ class Attention(nn.Module):
 
 # Self and Cross Attention mechanism (Checked)
 class CrossAttention(nn.Module):
-    """General implementation of Cross & Self Attention multi-head
-    """
+    '''General implementation of Cross & Self Attention multi-head
+    '''
     def __init__(self, embed_dim, hidden_dim, context_dim=None, num_heads=8, ):
         super(CrossAttention, self).__init__()
         self.hidden_dim = hidden_dim
@@ -364,7 +362,7 @@ class EmbedFC(nn.Module):
 
 
 class ContextUnet(nn.Module):
-    def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1, 
+    def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention="", 
                  pixel_size=28):
         super(ContextUnet, self).__init__()
         self.in_channels = in_channels
@@ -397,11 +395,8 @@ class ContextUnet(nn.Module):
         else:
             self.timeembed1 = EmbedFC(1, 2*n_feat)
             self.timeembed2 = EmbedFC(1, 1*n_feat)
-            self.contextembed1 = []
-            self.contextembed2 = []
-            for iclass in range(len(self.n_classes)):
-                self.contextembed1.append( EmbedFC(self.n_classes[iclass], self.n_out1).to(device) )
-                self.contextembed2.append( EmbedFC(self.n_classes[iclass], self.n_out2).to(device) )
+            self.contextembed1 = nn.ModuleList([EmbedFC(self.n_classes[iclass], self.n_out1) for iclass in range(len(self.n_classes))])
+            self.contextembed2 = nn.ModuleList([EmbedFC(self.n_classes[iclass], self.n_out2) for iclass in range(len(self.n_classes))])
 
 
         n_conv = pixel_size//4
@@ -418,7 +413,7 @@ class ContextUnet(nn.Module):
             nn.Conv2d(n_feat, self.in_channels, 3, 1, 1),
         )
 
-    def forward(self, x, c, t, context_mask):
+    def forward(self, x, c, t, context_mask=None):
         # x is (noisy) image, c is context label, t is timestep, 
         x = self.init_conv(x)
         if self.text:
@@ -493,6 +488,10 @@ class DDPM(nn.Module):
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
             self.register_buffer(k, v)
 
+        self.betas = torch.linspace(betas[0], betas[1], n_T).to(device)
+        self.alphas = 1. - self.betas
+        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
+
         self.n_T = n_T
         self.device = device
         self.flag_weight = flag_weight
@@ -511,11 +510,7 @@ class DDPM(nn.Module):
             + self.sqrtmab[_ts, None, None, None] * noise
         )  
 
-        # dropout context with some probability
-        context_mask = torch.bernoulli((torch.zeros(len(c)).to(self.device) if self.text else torch.zeros_like(c[0])) \
-                                       +self.drop_prob).to(self.device)
-        
-        return self.loss_mse(noise, self.nn_model(x_t, c, _ts / self.n_T, context_mask))
+        return self.loss_mse(noise, self.nn_model(x_t, c, _ts / self.n_T)) #, context_mask))
 
     def sample(self, n_sample, c_gen, size, device, guide_w = 0.0):
 
@@ -523,7 +518,7 @@ class DDPM(nn.Module):
          
         _c_gen = c_gen[:n_sample] if self.text else [tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()] 
 
-        context_mask = torch.zeros(len(_c_gen)).to(self.device) if self.text else torch.zeros_like(_c_gen[0]).to(device)
+        #context_mask = torch.zeros(len(_c_gen)).to(self.device) if self.text else torch.zeros_like(_c_gen[0]).to(device)
 
         x_i_store = [] 
         print()
@@ -533,8 +528,7 @@ class DDPM(nn.Module):
             t_is = t_is.repeat(n_sample,1,1,1)
 
             z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
-
-            eps = self.nn_model(x_i, _c_gen, t_is, context_mask)
+            eps = self.nn_model(x_i, _c_gen, t_is) #, context_mask)
             x_i = (
                 self.oneover_sqrta[i] * (x_i - eps * self.mab_over_sqrtmab[i])
                 + self.sqrt_beta_t[i] * z
@@ -554,6 +548,44 @@ class ConvertToRGB(object):
         return img
 
 
+    def ddim_step(self, x_t, t, noise_pred):
+        """
+        DDIM step to predict the next state of the image.
+        """
+        alpha_t = self.alphas_cumprod[t]
+        alpha_t_1 = torch.where(t > 0, self.alphas_cumprod[t-1], torch.tensor(1.0).to(self.device))
+        sigma_t = torch.sqrt((1 - alpha_t_1) / (1 - alpha_t) * (1 - alpha_t / alpha_t_1))
+        alpha_t = alpha_t.view(-1,1,1,1)
+        sigma_t = sigma_t.view(-1,1,1,1)
+        alpha_t_1 = alpha_t_1.view(-1,1,1,1)
+    
+        x_0_pred = (x_t - sigma_t * noise_pred) / torch.sqrt(alpha_t)
+        x_t_1 = torch.sqrt(alpha_t_1) * x_0_pred + sigma_t * torch.randn_like(x_t)
+        return x_t_1
+    
+    def sample_ddim(self, n_sample, c_gen, size, device):
+        """
+        Sample using the DDIM scheduler.
+        """
+        x_t = torch.randn(n_sample, *size).to(device)  # Initialize with noise
+
+        _c_gen = {k: v.to(device) for k, v in c_gen.items()}
+
+        x_i_store = [] 
+        for i in reversed(range(0, self.n_T)):
+            print(f'sampling timestep {i}',end='\r')
+            t = torch.full((n_sample,), i, device=device, dtype=torch.long)
+            noise_pred = self.nn_model(x_t, _c_gen, t.float() / self.n_T)
+            x_t = self.ddim_step(x_t, t, noise_pred)
+
+            if i%20==0:
+                x_i_store.append(x_t.detach().cpu().numpy())
+        
+        x_i_store = np.array(x_i_store)
+        return x_t, x_i_store
+
+    
+
 def training(args):
     print('start')
     start_time = time.time()
@@ -565,7 +597,6 @@ def training(args):
     alpha = args.alpha
     beta = args.beta
     test_size = args.test_size
-    save_model = args.save_model 
     dataset = args.dataset 
     num_samples = args.num_samples 
     pixel_size = args.pixel_size
@@ -573,7 +604,19 @@ def training(args):
     n_sample = args.n_sample 
     type_attention = args.type_attention 
     remove_node = args.remove_node 
+    seed = args.seed
+    scheduler = args.scheduler
     in_channels = 3 if any([x in dataset for x in ["celeba", "astronaut"]]) else 4
+
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
 
 
     with open("config_category.json", 'r') as f:
@@ -584,7 +627,7 @@ def training(args):
     experiment_classes = {
         "H42-train1": [2, 3, 1, 1],
         "H22-train1": [2, 2],
-        "default": [3, 3, 1]
+        "default": [2, 3, 1]
     }
     n_classes = experiment_classes.get(experiment, experiment_classes["default"])
 
@@ -598,13 +641,14 @@ def training(args):
 
     save_dir = f'./output{"_dbg" if args.debug else ""}/'+f'{dataset}{"_txt" if args.text else ""}'+'/'+experiment+'/'
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
-    save_dir = save_dir + str(pixel_size)+"_"+str(num_samples)+"_"+str(test_size)+"_"+str(n_feat)+"_"+str(n_T)+"_"+str(n_epoch)+"_"+str(lrate)+"_"+remove_node+"_"+str(alpha)+"_"+str(beta)+"_"+str(type_attention)+"/"
+    save_dir = save_dir + str(pixel_size) + str(num_samples) + "_" + str(test_size) + "_" + str(n_feat) + "_" + str(n_T) + "_" + str(n_epoch) \
+                        + "_" + str(lrate) + "_" + remove_node + "_" + str(alpha) + "_" + str(beta) + "_" + str(seed) + "/" #+ str(type_attention) + "/"
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
 
     ddpm = DDPM(text=args.text, nn_model=ContextUnet(text=args.text, in_channels=in_channels, n_feat=n_feat, 
                                                      n_classes=n_classes, dataset=dataset, 
                                                      type_attention=type_attention, pixel_size=pixel_size), 
-                                     betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
+                                     betas=(lrate, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
     ddpm.to(device)
     print('model', time.time() - start_time)
     train_dataset = load_dataset.my_dataset(args.text, tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
@@ -627,7 +671,6 @@ def training(args):
         # linear lrate decay
         optim.param_groups[0]['lr'] = lrate*(1-ep/n_epoch)
 
-        loss_ema = None
         pbar = tqdm(train_dataloader)
         for x, c in pbar:
             #print('train batch', time.time() - start_time)
@@ -637,10 +680,7 @@ def training(args):
             loss = ddpm(x, _c)
             log_dict['train_loss_per_batch'].append(loss.item())
             loss.backward()
-            if loss_ema is None:
-                loss_ema = loss.item()
-            else:
-                loss_ema = 0.95 * loss_ema + 0.05 * loss.item()
+            loss_ema = loss.item()
             pbar.set_description(f"loss: {loss_ema:.4f}")
             optim.step()
         
@@ -655,11 +695,14 @@ def training(args):
                     test_loss = ddpm(test_x, _test_c)
                     log_dict['test_loss_per_batch'][test_config].append(test_loss.item())
 
-            if save_model==0 and (ep + 1) % args.save_every == 0: 
+            if (ep + 1) % args.save_every == 0 or ep >= (n_epoch - 5): 
                 for test_config in output_configs: 
                     x_real, c_gen = next(iter(test_dataloaders[test_config]))
                     x_real = x_real[:n_sample].to(device)
-                    x_gen, x_gen_store = ddpm.sample(n_sample, c_gen, (in_channels, pixel_size, pixel_size), device, guide_w=0.0)
+                    if scheduler=="DDIM": 
+                        x_gen, x_gen_store = ddpm.sample_ddim(n_sample, c_gen, (in_channels, pixel_size, pixel_size), device)
+                    else:
+                        x_gen, x_gen_store = ddpm.sample(n_sample, c_gen, (in_channels, pixel_size, pixel_size), device, guide_w=0.0)
                     np.savez_compressed(save_dir + f"image_"+test_config+"_ep"+str(ep)+".npz", x_gen=x_gen.detach().cpu().numpy()) 
                     print('saved image at ' + save_dir + f"image_"+test_config+"_ep"+str(ep)+".png")
 
@@ -668,9 +711,9 @@ def training(args):
                         print('saved image file at ' + save_dir + f"gen_store_"+test_config+"_ep"+str(ep)+".npz")
 
 
-        if ep == int(n_epoch-1):
-            with open(save_dir + f"training_log_"+str(ep)+".json", "w") as outfile:
-                json.dump(log_dict, outfile)
+            if (ep + 1) == n_epoch:
+                with open(save_dir + f"training_log_"+str(ep)+".json", "w") as outfile:
+                    json.dump(log_dict, outfile)
 
 
 
