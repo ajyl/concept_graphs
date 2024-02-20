@@ -23,7 +23,7 @@ matplotlib.rc('font', **font)
 criterion = nn.CrossEntropyLoss()
 
 
-pixel_size = 28
+pixel_size = 128
 INPUT_DIM = pixel_size * pixel_size * 3
 device = 'cpu'
 #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -102,20 +102,32 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             if 'celeba' in dataset:
                 template_path = glob.glob('input/'+dataset+'/test/celeba_'+test_config+'_00*.jpg')
             else:
-                #template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
-                template_path = glob.glob('input/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
+                if 'astronaut' in dataset:
+                    if test_config == '11':
+                        template_path = ['Astronaut_Riding_a_Horse_(SDXL).jpg']
+                    elif test_config == '10':
+                        template_path = ['../predict_performance/get_images/16108/8438.png']
+                    elif test_config == '01':
+                        template_path = ['../predict_performance/get_images/16104/6512.png']
+                    else:
+                        template_path = ['../predict_performance/get_images/16096/34.png']
+                else:
+                    #template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
+                    template_path = glob.glob('input/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
             if debug:
                 template_path = ['Astronaut_Riding_a_Horse_(SDXL).jpg']
             x_real = Image.open(template_path[0])
             x_real = tf(x_real).detach().numpy()
             img_path = in_dir+"image_"+test_config+"_ep"+str(ep)+".npz" 
-            x_gen = np.load(img_path)["x_gen"]
+            x_gen = np.stack([np.load(img_path)["x_gen"][0]])
+            #x_gen = np.load(img_path)["x_gen"]
             x_gen = np.clip(x_gen, 0, 1)
-            pred, acc = calc_acc(x_gen, test_config, classifier_linear)
-            loss = calc_loss(x_gen, test_config, classifier_linear)
-            accs[test_config].append( acc )
-            preds[test_config].append( pred )
-            losses[test_config].append( loss )
+            if not 'astronaut' in dataset:
+                pred, acc = calc_acc(x_gen, test_config, classifier_linear)
+                loss = calc_loss(x_gen, test_config, classifier_linear)
+                accs[test_config].append( acc )
+                preds[test_config].append( pred )
+                losses[test_config].append( loss )
             x_gen = np.transpose(x_gen,(0,2,3,1))
             x_gen_plot[test_config] = np.mean(x_gen, axis=0)
             x_real_plot[test_config] = np.transpose(x_real, (1,2,0))
@@ -127,18 +139,18 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
     #sampled_eps = np.arange(0, 100, 10)
     #sampled_eps = [99]
     sampled_eps = eps
-    nrows = 1 if debug else len(configs[experiment]["test"])
+    nrows = 1 if debug else len(configs[experiment]["test"]) + len(configs[experiment]["train"])
     fig, axes = plt.subplots(ncols=len(sampled_eps)+1, nrows=nrows, sharex=True,sharey=True,
-                             figsize=(1.5*len(sampled_eps), 1.5*nrows), 
+                             figsize=((pixel_size//28)*1.5*len(sampled_eps), (pixel_size//28)*1.5*nrows), 
                              gridspec_kw = {'wspace':0., 'hspace':0.1})
-    for itest_config, test_config in enumerate(configs[experiment]["test"]): 
+    for itest_config, test_config in enumerate(configs[experiment]["test"] + configs[experiment]["train"]): 
         if debug:
             axes[0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
             break
         else:
             axes[itest_config,0].imshow(x_real_plot[test_config], vmin=0, vmax=1)
     for iep, ep in enumerate(sampled_eps): 
-        for itest_config, test_config in enumerate(configs[experiment]["test"]): 
+        for itest_config, test_config in enumerate(configs[experiment]["test"] + configs[experiment]["train"]): 
             if debug:
                 axes[iep+1].imshow(gen_plots[iep][test_config], vmin=0, vmax=1)
                 break
@@ -151,9 +163,9 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
             ax.spines['top'].set_color('#dddddd') 
             ax.spines['right'].set_color('#dddddd') 
             ax.spines['left'].set_color('#dddddd') 
-    plt.savefig(in_dir+"debug.png" if debug else "gen_learning{}{}.png".format('_celeba_' if 'celeba' in dataset else '', f'_{ep}' if ep != 99 else ''), bbox_inches='tight', pad_inches=0.03), plt.close()
+    plt.savefig(in_dir+"debug.png" if debug else in_dir+"gen_learning{}{}.png".format('_celeba_' if 'celeba' in dataset else '', f'_{ep}' if ep != 99 else ''), bbox_inches='tight', pad_inches=0.03), plt.close()
     print(in_dir+"gen_learning.png")
-    if debug:
+    if 'astronaut' in dataset:
         sys.exit()
 
 
@@ -188,12 +200,14 @@ def learning_dynamics(dataset, experiment, param, test_size="", prefix_dir="outp
 
 
 if __name__ == '__main__': 
-
+    print('we in dis')
     #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_1_1_256_500_100_0.0001_010_1500_2.0_0_1_2_1_1")
     #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
     #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
     #learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
     #learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
     #learning_dynamics("celeba-3classes-10000_txt", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output_dbg/", debug=True)
-    
+    learning_dynamics("astronaut-riding-horse_txt", "H22-train1", "128_5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=True)
+    #learning_dynamics("astronaut-riding-horse_txt", "H22-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
+    #learning_dynamics("astronaut-riding-horse", "H22-train1", "64_5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
 

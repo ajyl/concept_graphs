@@ -17,9 +17,13 @@ class my_dataset(Dataset):
     def __init__(self, text, transform=None, num_samples=5000, dataset="", configs="", training=True, test_size=None, alpha=1.0, beta=2.0, remove_node=None, flag_double=1):
         self.text = text
         if self.text:
-            self.text_map = [{'0': 'not male', '1': 'male'}, 
-                             {'0': 'smiling', '1': 'not smiling'}, 
-                             {'0': 'black hair', '1': 'blond hair'}]
+            if "celeba" in dataset:
+                self.text_map = [{'0': 'not male', '1': 'male'}, 
+                                {'0': 'smiling', '1': 'not smiling'}, 
+                                {'0': 'black hair', '1': 'blond hair'}]
+            else:
+                self.text_map = [{'0': 'not astronaut', '1': 'astronaut'}, 
+                                {'0': 'not riding horse', '1': 'riding horse'},]
         self.training = training
         self.test_size = test_size
         self.dataset = dataset
@@ -125,7 +129,7 @@ class my_dataset(Dataset):
                label = {i: int(name_labels[i]) for i in range(3)}
        else:
            if self.text:
-               raise
+               label = ' '.join([self.text_map[i][name_labels[i]] for i in range(2)])
            else:
                label = {i: int(name_labels[i]) for i in range(2)}
        return img, label

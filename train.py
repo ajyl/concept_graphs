@@ -364,7 +364,8 @@ class EmbedFC(nn.Module):
 
 
 class ContextUnet(nn.Module):
-    def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1):
+    def __init__(self, text, in_channels, n_feat = 256, n_classes=10, dataset="", type_attention=1, 
+                 pixel_size=28):
         super(ContextUnet, self).__init__()
         self.in_channels = in_channels
         self.n_contexts = len(n_classes)
@@ -380,7 +381,7 @@ class ContextUnet(nn.Module):
         self.up1 = UnetUp(4 * n_feat, n_feat, type_attention, self.text)
         self.up2 = UnetUp(2 * n_feat, n_feat, type_attention, self.text)
 
-        self.to_vec = nn.Sequential(nn.AvgPool2d(7), nn.GELU())
+        self.to_vec = nn.Sequential(nn.AvgPool2d(pixel_size//4), nn.GELU())
 
         ### embedding shape
         self.dataset = dataset
@@ -403,7 +404,7 @@ class ContextUnet(nn.Module):
                 self.contextembed2.append( EmbedFC(self.n_classes[iclass], self.n_out2).to(device) )
 
 
-        n_conv = 7
+        n_conv = pixel_size//4
         self.up0 = nn.Sequential(
             nn.ConvTranspose2d(2 * n_feat, 2 * n_feat, n_conv, n_conv), 
             nn.GroupNorm(8, 2 * n_feat),
@@ -421,16 +422,11 @@ class ContextUnet(nn.Module):
         # x is (noisy) image, c is context label, t is timestep, 
         x = self.init_conv(x)
         if self.text:
-            print(c, type(c), len(c))
             batch_encoding = self.tokenizer(c, truncation=True, max_length=self.max_length, return_length=True,
                                         return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
             tokens = batch_encoding["input_ids"].to(device)
-            print(tokens[:,:10], tokens.dtype, tokens.size())
             outputs = self.transformer(input_ids=tokens)
             cemb = outputs.last_hidden_state
-            print(cemb[:,:10], cemb.dtype, cemb.size())
-            print(self.transformer)
-            sys.exit()
             temb = self.timeembed(t)
         else:
             temb1 = self.timeembed1(t).view(-1, int(self.n_feat), 1, 1)
@@ -602,10 +598,12 @@ def training(args):
 
     save_dir = f'./output{"_dbg" if args.debug else ""}/'+f'{dataset}{"_txt" if args.text else ""}'+'/'+experiment+'/'
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
-    save_dir = save_dir + str(num_samples)+"_"+str(test_size)+"_"+str(n_feat)+"_"+str(n_T)+"_"+str(n_epoch)+"_"+str(lrate)+"_"+remove_node+"_"+str(alpha)+"_"+str(beta)+"_"+str(type_attention)+"/"
+    save_dir = save_dir + str(pixel_size)+"_"+str(num_samples)+"_"+str(test_size)+"_"+str(n_feat)+"_"+str(n_T)+"_"+str(n_epoch)+"_"+str(lrate)+"_"+remove_node+"_"+str(alpha)+"_"+str(beta)+"_"+str(type_attention)+"/"
     if not os.path.isdir(save_dir): os.makedirs(save_dir)
 
-    ddpm = DDPM(text=args.text, nn_model=ContextUnet(text=args.text, in_channels=in_channels, n_feat=n_feat, n_classes=n_classes, dataset=dataset, type_attention=type_attention), 
+    ddpm = DDPM(text=args.text, nn_model=ContextUnet(text=args.text, in_channels=in_channels, n_feat=n_feat, 
+                                                     n_classes=n_classes, dataset=dataset, 
+                                                     type_attention=type_attention, pixel_size=pixel_size), 
                                      betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
     ddpm.to(device)
     print('model', time.time() - start_time)
