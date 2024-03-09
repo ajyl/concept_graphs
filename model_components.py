@@ -207,13 +207,7 @@ class Attention(nn.Module):
 class CrossAttention(nn.Module):
     """General implementation of Cross & Self Attention multi-head"""
 
-    def __init__(
-        self,
-        embed_dim,
-        hidden_dim,
-        context_dim=None,
-        num_heads=8,
-    ):
+    def __init__(self, embed_dim, hidden_dim, context_dim=None, num_heads=8):
         super(CrossAttention, self).__init__()
         self.hidden_dim = hidden_dim
         self.context_dim = context_dim
@@ -273,10 +267,7 @@ class UnetDown(nn.Module):
         Process and downscale the image feature maps
         """
         self.text = text
-        layers = [
-            ResidualConvBlock(in_channels, out_channels),
-            nn.MaxPool2d(2),
-        ]
+        layers = [ResidualConvBlock(in_channels, out_channels), nn.MaxPool2d(2)]
         attention = nn.Identity()
         if type_attention == "self":
             create_self_attn = lambda dim: RearrangeToSequence(
@@ -348,9 +339,7 @@ class UnetUp(nn.Module):
         x = torch.cat((x, skip), 1)
         if self.text:
             return self.layers[-1](
-                self.layers[2](
-                    self.layers[1](self.layers[0](x), t_emb), c_emb
-                ),
+                self.layers[2](self.layers[1](self.layers[0](x), t_emb), c_emb),
                 t_emb,
             )
         else:
