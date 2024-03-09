@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 import numpy as np
 import load_dataset
+from celeba_dataset import celeba_dataset
 import os
 import glob
 import json
@@ -651,7 +652,20 @@ def training(args):
                                      betas=(lrate, 0.02), n_T=n_T, device=device, drop_prob=0.1, n_classes=n_classes)
     ddpm.to(device)
     print('model', time.time() - start_time)
-    train_dataset = load_dataset.my_dataset(args.text, tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
+
+    if dataset.startswith("celeba"):
+        train_dataset = celeba_dataset(
+            args.text,
+            tf,
+            num_samples,
+            configs=configs["train"],
+            training=True,
+            alpha=alpha,
+            remove_node=remove_node,
+        )
+
+    else:
+        train_dataset = load_dataset.my_dataset(args.text, tf, num_samples, dataset, configs=configs["train"], training=True, alpha=alpha, remove_node=remove_node)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1)
     print('train', time.time() - start_time)
     test_dataloaders = {}
@@ -659,7 +673,19 @@ def training(args):
                 'test_loss_per_batch': {key: [] for key in configs["test"]}}
     output_configs = list(set(configs["test"] + configs["train"])) 
     for config in output_configs: 
-        test_dataset = load_dataset.my_dataset(args.text, tf, n_sample, dataset, configs=config, training=False, test_size=test_size) 
+
+        if dataset.startswith("celeba"):
+            test_dataset = celeba_dataset(
+                args.text,
+                tf,
+                n_sample,
+                configs=config,
+                training=False,
+                test_size=test_size,
+            )
+        else:
+            test_dataset = load_dataset.my_dataset(args.text, tf, n_sample, dataset, configs=config, training=False, test_size=test_size) 
+
         test_dataloaders[config] = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
     print('test', time.time() - start_time)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
