@@ -2,9 +2,12 @@
 Modules for model components.
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange, repeat, pack, unpack
+from transformers import CLIPTokenizer, CLIPTextModel
 
 
 def l2norm(t):
@@ -267,7 +270,10 @@ class UnetDown(nn.Module):
         Process and downscale the image feature maps
         """
         self.text = text
-        layers = [ResidualConvBlock(in_channels, out_channels), nn.MaxPool2d(2)]
+        layers = [
+            ResidualConvBlock(in_channels, out_channels),
+            nn.MaxPool2d(2),
+        ]
         attention = nn.Identity()
         if type_attention == "self":
             create_self_attn = lambda dim: RearrangeToSequence(
@@ -339,7 +345,9 @@ class UnetUp(nn.Module):
         x = torch.cat((x, skip), 1)
         if self.text:
             return self.layers[-1](
-                self.layers[2](self.layers[1](self.layers[0](x), t_emb), c_emb),
+                self.layers[2](
+                    self.layers[1](self.layers[0](x), t_emb), c_emb
+                ),
                 t_emb,
             )
         else:
@@ -350,7 +358,7 @@ class EmbedFC(nn.Module):
     def __init__(self, input_dim, emb_dim):
         super(EmbedFC, self).__init__()
         """
-        generic one layer FC NN for embedding things  
+        Generic one layer FC NN for embedding things
         """
         self.input_dim = input_dim
         layers = [
@@ -375,6 +383,7 @@ class ContextUnet(nn.Module):
         dataset="",
         type_attention="",
         pixel_size=28,
+        device=None,
     ):
         super(ContextUnet, self).__init__()
         self.in_channels = in_channels
@@ -384,6 +393,11 @@ class ContextUnet(nn.Module):
 
         self.init_conv = ResidualConvBlock(in_channels, n_feat, is_res=True)
         self.text = text
+        self.device = device
+        if self.device is None:
+            self.device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu"
+            )
 
         self.down1 = UnetDown(n_feat, n_feat, type_attention, self.text)
         self.down2 = UnetDown(n_feat, 2 * n_feat, type_attention, self.text)
@@ -438,12 +452,13 @@ class ContextUnet(nn.Module):
             nn.Conv2d(n_feat, self.in_channels, 3, 1, 1),
         )
 
-    def forward(self, x, c, t, context_mask=None):
+    def forward(self, x, context_label, t, context_mask=None):
         # x is (noisy) image, c is context label, t is timestep,
-        x = self.init_conv(x)
+        # x: [batch, channels, width(?), height(?)]
+        x = self.init_conv(x)  # [batch, n_feat, width, height]
         if self.text:
             batch_encoding = self.tokenizer(
-                c,
+                context_label,
                 truncation=True,
                 max_length=self.max_length,
                 return_length=True,
@@ -451,47 +466,57 @@ class ContextUnet(nn.Module):
                 padding="max_length",
                 return_tensors="pt",
             )
-            tokens = batch_encoding["input_ids"].to(device)
+            tokens = batch_encoding["input_ids"].to(self.device)
             outputs = self.transformer(input_ids=tokens)
             cemb = outputs.last_hidden_state
             temb = self.timeembed(t)
+
         else:
             temb1 = self.timeembed1(t).view(-1, int(self.n_feat), 1, 1)
             temb2 = self.timeembed2(t).view(-1, int(self.n_feat / 2), 1, 1)
 
-            # embed context, time step
-            if not self.text:
-                cemb1 = 0
-                cemb2 = 0
-                for ic in range(len(self.n_classes)):
-                    tmpc = c[ic]
-                    if tmpc.dtype == torch.int64:
-                        tmpc = nn.functional.one_hot(
-                            tmpc, num_classes=self.n_classes[ic]
-                        ).type(torch.float)
-                    cemb1 += self.contextembed1[ic](tmpc).view(
-                        -1, int(self.n_out1 / 1.0), 1, 1
-                    )
-                    cemb2 += self.contextembed2[ic](tmpc).view(
-                        -1, int(self.n_out2 / 1.0), 1, 1
-                    )
+            cemb1 = 0
+            cemb2 = 0
+            for ic in range(len(self.n_classes)):
+                tmpc = context_label[ic]
+                if tmpc.dtype == torch.int64:
+                    tmpc = nn.functional.one_hot(
+                        tmpc, num_classes=self.n_classes[ic]
+                    ).type(torch.float)
+                cemb1 += self.contextembed1[ic](tmpc).view(
+                    -1, int(self.n_out1 / 1.0), 1, 1
+                )
+                cemb2 += self.contextembed2[ic](tmpc).view(
+                    -1, int(self.n_out2 / 1.0), 1, 1
+                )
 
+        # [b, f, w/2, h/2]
         down1 = self.down1(x, temb, cemb) if self.text else self.down1(x)
+
+        # [b, 2*f, w/4, h/4]
         down2 = (
             self.down2(down1, temb, cemb) if self.text else self.down2(down1)
         )
+
+        # [b, 2*f, 1, 1]
         hiddenvec = self.to_vec(down2)
 
+        # [b, 2*f, w/4, h/4]
         up1 = self.up0(hiddenvec)
+
+        # [b, f, w/2, h/2]
         up2 = (
             self.up1(up1, down2, temb, cemb)
             if self.text
             else self.up1(cemb1 * up1 + temb1, down2)
         )
+
+        # [b, f, w, h]
         up3 = (
             self.up2(up2, down1, temb, cemb)
             if self.text
             else self.up2(cemb2 * up2 + temb2, down1)
         )
+        # [b, channel, w, h]
         out = self.out(torch.cat((up3, x), 1))
         return out
