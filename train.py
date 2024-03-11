@@ -24,7 +24,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--exp-name", type=str)
 parser.add_argument("--save-every", type=int, default=100)
+parser.add_argument("--save-ckpt-every", type=int, default=10)
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--text", action="store_true")
 parser.add_argument("--lrate", default=1e-4, type=float)
@@ -138,11 +140,9 @@ class DDPM(nn.Module):
                 tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()
             ]
         )
-
         # context_mask = torch.zeros(len(_c_gen)).to(self.device) if self.text else torch.zeros_like(_c_gen[0]).to(device)
 
         x_i_store = []
-        print()
         for i in range(self.n_T, 0, -1):
             print(f"sampling timestep {i}", end="\r")
             t_is = torch.tensor([i / self.n_T]).to(device)
@@ -262,6 +262,7 @@ def training(args):
 
     if "celeba" in dataset:
         n_classes = [2, 2, 2]
+
     if "astronaut" in dataset:
         tf = transforms.Compose(
             [
@@ -287,6 +288,7 @@ def training(args):
     )
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
+
     save_dir = (
         save_dir
         + str(pixel_size)
@@ -324,6 +326,7 @@ def training(args):
             dataset=dataset,
             type_attention=type_attention,
             pixel_size=pixel_size,
+            device=device,
         ),
         betas=(lrate, 0.02),
         n_T=n_T,
@@ -391,6 +394,7 @@ def training(args):
         test_dataloaders[config] = DataLoader(
             test_dataset, batch_size=batch_size, shuffle=False, num_workers=1
         )
+
     print("test", time.time() - start_time)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
     for ep in range(n_epoch):
@@ -433,7 +437,16 @@ def training(args):
                         test_loss.item()
                     )
 
+            if (ep + 1) % args.save_ckpt_every == 0:
+
+                ckpt_dir = os.path.join("ckpts/", args.exp_name)
+                if not os.path.isdir(ckpt_dir):
+                    os.makedirs(ckpt_dir)
+                ckpt_filepath = os.path.join(ckpt_dir, f"epoch_{ep}.pt")
+                torch.save(ddpm.nn_model, ckpt_filepath)
+
             if (ep + 1) % args.save_every == 0 or ep >= (n_epoch - 5):
+
                 for test_config in output_configs:
                     x_real, c_gen = next(iter(test_dataloaders[test_config]))
                     x_real = x_real[:n_sample].to(device)
