@@ -428,12 +428,14 @@ class ContextUnet(nn.Module):
             self.contextembed1 = nn.ModuleList(
                 [
                     EmbedFC(self.n_classes[iclass], self.n_out1)
+                    #nn.Linear(self.n_classes[iclass], self.n_out1, bias=False)
                     for iclass in range(len(self.n_classes))
                 ]
             )
             self.contextembed2 = nn.ModuleList(
                 [
                     EmbedFC(self.n_classes[iclass], self.n_out2)
+                    #nn.Linear(self.n_classes[iclass], self.n_out2, bias=False)
                     for iclass in range(len(self.n_classes))
                 ]
             )

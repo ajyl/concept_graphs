@@ -157,12 +157,12 @@ def learning_dynamics(
             x_gen = np.stack([np.load(img_path)["x_gen"][0]])
             # x_gen = np.load(img_path)["x_gen"]
             x_gen = np.clip(x_gen, 0, 1)
-            if not "astronaut" in dataset:
-                pred, acc = calc_acc(x_gen, test_config, classifier_linear)
-                loss = calc_loss(x_gen, test_config, classifier_linear)
-                accs[test_config].append(acc)
-                preds[test_config].append(pred)
-                losses[test_config].append(loss)
+            #if not "astronaut" in dataset:
+            #    pred, acc = calc_acc(x_gen, test_config, classifier_linear)
+            #    loss = calc_loss(x_gen, test_config, classifier_linear)
+            #    accs[test_config].append(acc)
+            #    preds[test_config].append(pred)
+            #    losses[test_config].append(loss)
             x_gen = np.transpose(x_gen, (0, 2, 3, 1))
             x_gen_plot[test_config] = np.mean(x_gen, axis=0)
             x_real_plot[test_config] = np.transpose(x_real, (1, 2, 0))
@@ -259,6 +259,8 @@ def learning_dynamics(
         pad=8,
         labelsize=15,
     )
+
+    """
     for itest_config, test_config in enumerate(
         configs[experiment]["train"] + configs[experiment]["test"]
     ):
@@ -297,6 +299,7 @@ def learning_dynamics(
         in_dir + "Full_learning_dynamics_multi-class_" + option + ".pdf"
     ), plt.close()
     print(in_dir + "Full_learning_dynamics_multi-class_" + option + ".pdf")
+    """
 
 
 if __name__ == "__main__":
@@ -308,11 +311,12 @@ if __name__ == "__main__":
     # learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
     # learning_dynamics("celeba-3classes-10000_txt", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output_dbg/", debug=True)
     learning_dynamics(
-        "astronaut-riding-horse_txt",
-        "H22-train1",
-        "128_5000_1.4_256_500_100_0.0001_010_1500_2.0_",
+        "celeba-3classes-10000",
+        "H32-train1",
+        "285000_1.6_256_500_100_0.0001_None_1500_2.0_1",
         prefix_dir="output/",
-        debug=True,
+        debug=False,
     )
     # learning_dynamics("astronaut-riding-horse_txt", "H22-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
     # learning_dynamics("astronaut-riding-horse", "H22-train1", "64_5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
+
