@@ -95,7 +95,7 @@ class DDPM(nn.Module):
         self.n_classes = n_classes
 
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
-            self.register_buffer(k, v)
+            self.register_buffer(k, v.to(device))
 
         self.betas = torch.linspace(betas[0], betas[1], n_T).to(device)
         self.alphas = 1.0 - self.betas
