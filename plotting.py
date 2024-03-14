@@ -17,7 +17,7 @@ matplotlib.rc("font", **font)
 criterion = nn.CrossEntropyLoss()
 
 
-pixel_size = 128
+pixel_size = 28
 INPUT_DIM = pixel_size * pixel_size * 3
 device = "cpu"
 # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -64,14 +64,14 @@ def calc_acc(preds, obs, classifier, nclasses=3):
     preds = []
     for ii in range(nclasses):
         top_pred = y_pred[ii].argmax(1, keepdim=True).detach().numpy()
-        acc = np.array(top_pred[:, 0] == int(obs[ii]), dtype=np.int)
+        acc = np.array(top_pred[:, 0] == int(obs[ii]), dtype=int)
         accs.append(acc)
         preds.append(top_pred[:, 0])
     return np.array(preds), np.array(accs)
 
 
 def learning_dynamics(
-    dataset, experiment, param, test_size="", prefix_dir="output/", debug=False
+    dataset, experiment, dir_name, param, test_size="", prefix_dir="output/", debug=False
 ):
     """
     properties_json = "properties_"+dataset+".json"
@@ -83,14 +83,15 @@ def learning_dynamics(
     )
     # classifier_linear.load_state_dict(torch.load("working/linear-classifier_"+dataset+"_multi-class.pt", map_location=torch.device(device)))
 
-    in_dir = prefix_dir + dataset + "/" + experiment + "/" + param + "/"
+    in_dir = prefix_dir + dataset + "/" + dir_name + "/" + param + "/"
     dataset = dataset.split("_txt")[0]
-    out_dir = prefix_dir + dataset + "/" + experiment + "/" + param + "_"
+    out_dir = prefix_dir + dataset + "/" + dir_name + "/" + param + "_"
 
     # eps = range(100)
     eps = [99]
     with open("config_category.json", "r") as f:
         configs = json.load(f)
+
     accs = {
         test_config: []
         for test_config in configs[experiment]["test"]
@@ -154,8 +155,8 @@ def learning_dynamics(
             img_path = (
                 in_dir + "image_" + test_config + "_ep" + str(ep) + ".npz"
             )
-            x_gen = np.stack([np.load(img_path)["x_gen"][0]])
-            # x_gen = np.load(img_path)["x_gen"]
+            #x_gen = np.stack([np.load(img_path)["x_gen"][0]])
+            x_gen = np.load(img_path)["x_gen"]
             x_gen = np.clip(x_gen, 0, 1)
             #if not "astronaut" in dataset:
             #    pred, acc = calc_acc(x_gen, test_config, classifier_linear)
@@ -306,7 +307,12 @@ if __name__ == "__main__":
     print("we in dis")
     # learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_1_1_256_500_100_0.0001_010_1500_2.0_0_1_2_1_1")
     # learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
-    # learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1_1_2_1")
+    learning_dynamics(
+        "celeba-3classes-10000_txt",
+        "H32-train1",
+        "nonlinear_contextembed_rerun_text",
+        "285000_1.6_256_500_100_0.0001_None_1500_2.0_1/"
+    )
     # learning_dynamics("celeba-3classes-10000", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
     # learning_dynamics("single-body_2d_3classes", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_1", prefix_dir="output_dbg/")
     # learning_dynamics("celeba-3classes-10000_txt", "H32-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output_dbg/", debug=True)
@@ -317,6 +323,3 @@ if __name__ == "__main__":
         prefix_dir="output/",
         debug=False,
     )
-    # learning_dynamics("astronaut-riding-horse_txt", "H22-train1", "5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
-    # learning_dynamics("astronaut-riding-horse", "H22-train1", "64_5000_1.4_256_500_100_0.0001_010_1500_2.0_", prefix_dir="output/", debug=False)
-

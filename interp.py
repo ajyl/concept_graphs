@@ -2,10 +2,12 @@
 Module Doc String
 """
 import json
+import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from celeba_dataset import celeba_dataset
 from train import DDPM
+from record_utils import record_activations
 
 
 def main():

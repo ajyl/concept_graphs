@@ -283,7 +283,7 @@ def training(args):
         f'./output{"_dbg" if args.debug else ""}/'
         + f'{dataset}{"_txt" if args.text else ""}'
         + "/"
-        + experiment
+        + args.exp_name
         + "/"
     )
     if not os.path.isdir(save_dir):
