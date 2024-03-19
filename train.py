@@ -16,7 +16,8 @@ from torchvision.datasets import MNIST, ImageFolder
 from torchvision.utils import save_image, make_grid
 from einops import repeat
 from load_dataset import my_dataset
-from celeba_dataset import celeba_dataset
+from cg_datasets.celeba_dataset import celeba_dataset
+from cg_datasets.shapes_dataset import shapes_dataset
 from model_components import ContextUnet
 
 
@@ -254,6 +255,7 @@ def training(args):
     experiment_classes = {
         "H42-train1": [2, 3, 1, 1],
         "H22-train1": [2, 2],
+        # "H32-train1": [2, 2, 2],
         "default": [2, 3, 1],
     }
     n_classes = experiment_classes.get(
@@ -348,6 +350,19 @@ def training(args):
             remove_node=remove_node,
         )
 
+    elif dataset.startswith("single-body_2d_3classes"):
+        breakpoint()
+        train_dataset = shapes_dataset(
+            args.text,
+            transform=tf,
+            num_samples=num_samples,
+            configs=configs["train"],
+            training=True,
+            alpha=alpha,
+            remove_node=remove_node,
+        )
+        raise RuntimeError("Not tested yet.")
+
     else:
         train_dataset = my_dataset(
             args.text,
@@ -380,6 +395,19 @@ def training(args):
                 training=False,
                 test_size=test_size,
             )
+
+        elif dataset.startswith("single-body_2d_3classes"):
+            breakpoint()
+            test_dataset = shapes_dataset(
+                args.text,
+                transform=tf,
+                num_samples=n_sample,
+                configs=config,
+                training=False,
+                test_size=test_size,
+            )
+            raise RuntimeError("Not tested yet.")
+
         else:
             test_dataset = my_dataset(
                 args.text,

@@ -13,6 +13,7 @@ from fancy_einsum import einsum
 from celeba_dataset import celeba_dataset
 from train import DDPM
 from record_utils import record_activations
+from probe_exps.probe_utils import load_acts
 from cg_constants import ROOT_DIR
 
 
@@ -32,11 +33,10 @@ def _build_batch(
     labels = None
     for concept_label in concepts:
         curr_acts_btd = acts[concept_label][idx : idx + batch_size]
-        curr_batchsize = curr_acts_btd.shape[0]
         curr_label = torch.zeros(
             (
-                curr_batchsize,
-                timesteps,
+                curr_acts_btd.shape[0],
+                curr_acts_btd.shape[1],
                 num_concepts,
                 num_labels_per_concept,
             )
@@ -77,10 +77,11 @@ def main():
             ROOT_DIR, "config_category.json"
         ),
         "concepts": ["000", "001", "010", "100", "011", "101", "110", "111"],
-        "activations_dir": os.path.join(
-            ROOT_DIR, "probe_exps/cached_acts/first_run"
-        ),
+        "activations_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts/"),
         "valid_every": 200,
+        "probe_layer": "bottleneck",
+        "probe_dir": os.path.join(ROOT_DIR, "probe_exps/probe_ckpts"),
+        "T_index_every": 10,
     }
 
     is_text = run_config["is_text"]
@@ -91,8 +92,17 @@ def main():
     config_category_filepath = run_config["config_category_filepath"]
     concepts = run_config["concepts"]
     batch_size = run_config["batch_size"]
-    acts_dir = run_config["activations_dir"]
+    acts_dir = os.path.join(
+        run_config["activations_dir"], run_config["probe_layer"]
+    )
+
+    output_dir = os.path.join(
+        run_config["probe_dir"], run_config["probe_layer"]
+    )
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
     valid_every = run_config["valid_every"]
+    t_index = run_config["T_index_every"]
     n_feat = 256
 
     in_channels = 3
@@ -104,7 +114,7 @@ def main():
     probe = (
         torch.randn(
             n_feat * 2,
-            timesteps,
+            int(timesteps / t_index),
             num_concepts,
             num_labels_per_concept,
             requires_grad=False,
@@ -120,21 +130,8 @@ def main():
     )
     torch.manual_seed(42)
 
-    train_size = int(total_samples * 0.95)
-    valid_size = total_samples - train_size
-    n_epochs = 5
-
-    inner_batch_size = int(batch_size / len(concepts))
-    train_acts = {}
-    valid_acts = {}
-    print("Loading cached activations..")
-    for concept_label in concepts:
-        print(f"  {concept_label}")
-        acts = torch.load(
-            os.path.join(acts_dir, f"activations_{concept_label}.pt")
-        )
-        train_acts[concept_label] = acts[:train_size]
-        valid_acts[concept_label] = acts[train_size:]
+    n_epochs = 20
+    train_acts, valid_acts = load_acts(acts_dir, batch_size, concepts, t_index)
 
     for ep in range(n_epochs):
         print(f"Epoch {ep}")
@@ -220,9 +217,15 @@ def main():
                 print(f"Train loss: {train_loss.item()}")
                 print(f"Val loss: {sum(val_losses) / (valid_size * 8)}")
                 print(f"Val acc: {sum(val_accuracies) / (valid_size * 8)}")
-                print(acc_per_timestep)
+                # print(acc_per_timestep)
 
-        torch.save(probe, f"probe_{ep}.pt")
+        torch.save(
+            probe,
+            os.path.join(
+                output_dir,
+                f"epoch_{ep}.pt",
+            ),
+        )
 
 
 if __name__ == "__main__":
