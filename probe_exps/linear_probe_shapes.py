@@ -71,7 +71,6 @@ def main():
         "batch_size": 128,
         "pixel_size": 28,
         "total_samples": 5056,
-        "cache_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts"),
         "config_category_filepath": os.path.join(
             ROOT_DIR, "config_category.json"
         ),
@@ -81,6 +80,7 @@ def main():
         "probe_layer": "bottleneck",
         "probe_dir": os.path.join(ROOT_DIR, "probe_exps/probe_ckpts"),
         "T_index_every": 10,
+        "dataset": "shapes",
     }
 
     is_text = run_config["is_text"]
@@ -91,12 +91,16 @@ def main():
     config_category_filepath = run_config["config_category_filepath"]
     concepts = run_config["concepts"]
     batch_size = run_config["batch_size"]
+
+    dataset = run_config["dataset"]
+    probe_layer = run_config["probe_layer"]
     acts_dir = os.path.join(
-        run_config["activations_dir"], run_config["probe_layer"]
+        run_config["activations_dir"],
+        f"{dataset}/{probe_layer}/",
     )
 
     output_dir = os.path.join(
-        run_config["probe_dir"], run_config["probe_layer"]
+        run_config["probe_dir"], f"{dataset}/{probe_layer}"
     )
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
@@ -132,6 +136,9 @@ def main():
     n_epochs = 20
     train_acts, valid_acts = load_acts(acts_dir, batch_size, concepts, t_index)
 
+    train_size = train_acts["000"].shape[0]
+    valid_size = valid_acts["000"].shape[0]
+    inner_batch_size = int(batch_size / len(concepts))
     for ep in range(n_epochs):
         print(f"Epoch {ep}")
 

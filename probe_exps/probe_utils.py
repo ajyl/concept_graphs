@@ -2,8 +2,7 @@ import os
 import torch
 
 
-def load_acts(acts_dir, batch_size, concepts, t_index):
-    inner_batch_size = int(batch_size / len(concepts))
+def load_acts(acts_dir, concepts, t_index):
     all_acts = {}
     print("Loading cached activations..")
 

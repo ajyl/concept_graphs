@@ -5,14 +5,16 @@ import os
 import json
 from tqdm import tqdm
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import einops
 import torch
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 from torchvision import transforms
 from fancy_einsum import einsum
 import plotly.express as px
 
-from celeba_dataset import celeba_dataset
 from train import DDPM
 from record_utils import record_activations
 from probe_exps.linear_probe import _build_batch
@@ -24,53 +26,39 @@ def run_eval():
     """ Driver """
     run_config = {
         "is_text": False,
-        "nn_model_path": os.path.join(
-            ROOT_DIR, "ckpts/nonlinear_contextembed_rerun/epoch_99.pt"
-        ),
-        "betas": (1e-4, 0.02),
         "n_T": 500,
         "drop_prob": 0.1,
-        "n_classes": [2, 2, 2],
-        "device": "cuda:0",
         "batch_size": 128,
-        "pixel_size": 28,
-        "total_samples": 5056,
-        "cache_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts"),
-        "config_category_filepath": os.path.join(
-            ROOT_DIR, "config_category.json"
-        ),
         "concepts": ["000", "001", "010", "100", "011", "101", "110", "111"],
-        # "concepts": ["000", "001", "010", "100"],
-        # "concepts": ["011", "101", "110", "111"],
         "activations_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts/"),
         "T_index_every": 10,
         "probe_dir": os.path.join(ROOT_DIR, "probe_exps/probe_ckpts"),
         "probe_layer": "bottleneck",
+        "dataset": "shapes",
     }
-
-    is_text = run_config["is_text"]
-    device = run_config["device"]
-    pixel_size = run_config["pixel_size"]
-    total_samples = run_config["total_samples"]
-    config_category_filepath = run_config["config_category_filepath"]
     concepts = run_config["concepts"]
     batch_size = run_config["batch_size"]
 
-    probe_dir = run_config["probe_dir"]
     probe_layer = run_config["probe_layer"]
-    acts_dir = os.path.join(run_config["activations_dir"], probe_layer)
+    dataset = run_config["dataset"]
+    probe_dir = os.path.join(
+        run_config["probe_dir"], f"{dataset}/{probe_layer}"
+    )
+    acts_dir = os.path.join(
+        run_config["activations_dir"],
+        f"{dataset}/{probe_layer}/",
+    )
     timesteps = run_config["n_T"]
     t_index = run_config["T_index_every"]
     n_feat = 256
 
     num_concepts = 3
     num_labels_per_concept = 2
-    probe_dir = os.path.join(probe_dir, probe_layer)
 
     probe = torch.load(os.path.join(probe_dir, "epoch_19.pt"))
 
     inner_batch_size = int(batch_size / len(concepts))
-    train_acts, valid_acts = load_acts(acts_dir, batch_size, concepts, t_index)
+    _, valid_acts = load_acts(acts_dir, batch_size, concepts, t_index)
 
     val_losses = []
     val_accuracies = []
@@ -122,7 +110,7 @@ def run_eval():
         val_accuracies.append(valid_acc * curr_valid_batch_size)
 
     fig = px.line(all_results.float().mean(dim=0).cpu())
-    fig.write_image("zxcv_20.png")
+    fig.write_image("zxcv_21.png")
     print(f"Val loss: {sum(val_losses) / (valid_size * 8)}")
     print(f"Val acc: {sum(val_accuracies) / (valid_size * 8)}")
     print(acc_per_timestep)
@@ -130,31 +118,40 @@ def run_eval():
     print("z")
 
 
-def plot():
-
+def cos_sim():
+    """ Driver """
     run_config = {
-        "is_text": False,
-        "nn_model_path": os.path.join(
-            ROOT_DIR, "ckpts/nonlinear_contextembed_rerun/epoch_99.pt"
-        ),
-        "betas": (1e-4, 0.02),
-        "n_T": 500,
-        "drop_prob": 0.1,
-        "n_classes": [2, 2, 2],
-        "device": "cuda:0",
-        "batch_size": 128,
-        "pixel_size": 28,
-        "total_samples": 5056,
-        "cache_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts"),
-        "config_category_filepath": os.path.join(
-            ROOT_DIR, "config_category.json"
-        ),
         "concepts": ["000", "001", "010", "100", "011", "101", "110", "111"],
-        "activations_dir": os.path.join(ROOT_DIR, "probe_exps/cached_acts/"),
+        "probe_dir": os.path.join(ROOT_DIR, "probe_exps/probe_ckpts"),
+        "probe_layer": "bottleneck",
+        "dataset": "shapes",
     }
-    probe = torch.load("probe_4.pt")
+    probe_layer = run_config["probe_layer"]
+    dataset = run_config["dataset"]
+    probe_dir = os.path.join(
+        run_config["probe_dir"], f"{dataset}/{probe_layer}"
+    )
+    probe = torch.load(os.path.join(probe_dir, "epoch_19.pt"))
+    cos_sim = F.cosine_similarity
+    print("z")
 
+    probes = probe[:, -1, :, 0]
+    probes_norm = probes / probes.norm(dim=0)
+    cos_scores = torch.mm(probes_norm.transpose(0, 1), probes_norm)
+
+    fig = plt.figure(figsize=(12, 12))
+    sns.heatmap(
+        cos_scores.detach().cpu(),
+        cmap="magma_r",
+        vmax=1.0,
+        vmin=0,
+        annot=True,
+        fmt=".2f",
+    )
+    fig.savefig("heatmap_shapes.png")
+
+    breakpoint()
 
 if __name__ == "__main__":
-    # plot()
-    run_eval()
+    #run_eval()
+    cos_sim()

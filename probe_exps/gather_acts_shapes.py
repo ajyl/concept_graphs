@@ -17,7 +17,7 @@ def main():
     """ Probe hidden representations """
     run_config = {
         "dataset": "shapes",
-        "exp_name": "2nd_batch",
+        "exp_name": "debug",
         "is_text": False,
         "nn_model_path": os.path.join(ROOT_DIR, "ckpts/shapes_v1/epoch_99.pt"),
         "betas": (1e-4, 0.02),
