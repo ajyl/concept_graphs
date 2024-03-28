@@ -342,6 +342,8 @@ class UnetUp(nn.Module):
             self.model = nn.Sequential(*layers)
 
     def forward(self, x, skip, t_emb=None, c_emb=None):
+        # x: [32, 512, 7, 7]
+        # skip: [32, 512, 7, 7]
         x = torch.cat((x, skip), 1)
         if self.text:
             return self.layers[-1](
@@ -454,7 +456,7 @@ class ContextUnet(nn.Module):
             nn.Conv2d(n_feat, self.in_channels, 3, 1, 1),
         )
 
-    def forward(self, x, context_label, t, context_mask=None):
+    def forward(self, x, context_label, t, context_mask=None, condition_concepts=None):
         # x is (noisy) image, c is context label, t is timestep,
         # x: [batch, channels, width(?), height(?)]
         x = self.init_conv(x)  # [batch, n_feat, width, height]
@@ -479,12 +481,16 @@ class ContextUnet(nn.Module):
 
             cemb1 = 0
             cemb2 = 0
-            for ic in range(len(self.n_classes)):
+            if condition_concepts is None:
+                condition_concepts = list(range(len(self.n_classes)))
+
+            for ic in condition_concepts:
                 tmpc = context_label[ic]
                 if tmpc.dtype == torch.int64:
                     tmpc = nn.functional.one_hot(
                         tmpc, num_classes=self.n_classes[ic]
                     ).type(torch.float)
+
                 cemb1 += self.contextembed1[ic](tmpc).view(
                     -1, int(self.n_out1 / 1.0), 1, 1
                 )
