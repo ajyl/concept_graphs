@@ -86,7 +86,16 @@ class DDPM(nn.Module):
             noise, self.nn_model(x_t, c, _ts / self.n_T)
         )  # , context_mask))
 
-    def sample(self, n_sample, c_gen, size, device, guide_w=0.0):
+    def sample(
+        self,
+        n_sample,
+        c_gen,
+        size,
+        device,
+        guide_w=0.0,
+        condition_concepts=None,
+        average_concepts=None,
+    ):
 
         x_i = torch.randn(n_sample, *size).to(
             device
@@ -99,7 +108,6 @@ class DDPM(nn.Module):
                 tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()
             ]
         )
-        # context_mask = torch.zeros(len(_c_gen)).to(self.device) if self.text else torch.zeros_like(_c_gen[0]).to(device)
 
         x_i_store = []
         for i in range(self.n_T, 0, -1):
@@ -108,7 +116,13 @@ class DDPM(nn.Module):
             t_is = t_is.repeat(n_sample, 1, 1, 1)
 
             z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
-            eps = self.nn_model(x_i, _c_gen, t_is)  # , context_mask)
+            eps = self.nn_model(
+                x_i,
+                _c_gen,
+                t_is,
+                condition_concepts=condition_concepts,
+                average_concepts=average_concepts,
+            )
             x_i = (
                 self.oneover_sqrta[i] * (x_i - eps * self.mab_over_sqrtmab[i])
                 + self.sqrt_beta_t[i] * z

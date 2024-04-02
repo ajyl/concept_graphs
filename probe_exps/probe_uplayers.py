@@ -5,6 +5,7 @@ import os
 import json
 from tqdm import tqdm
 import numpy as np
+import matplotlib.pyplot as plt
 import einops
 import torch
 import torch.nn as nn
@@ -36,7 +37,7 @@ class Unembed(nn.Module):
 
         self.n_out1 = 2 * n_feat
         self.n_out2 = n_feat
-        self.n_feat = n_feat
+        self.n_feat = 2 * n_feat
         self.n_classes = n_classes
         self.in_channels = in_channels
 
@@ -93,14 +94,14 @@ class Unembed(nn.Module):
         up1 = self.up0(bottleneck)
 
         # DESIGN DECISION 2: set down2 to 0.
-        down2 = torch.zeros_like(up1)
+        down1 = torch.zeros_like(up1)
         # [b, f, w/2, h/2]
-        up2 = self.up1(cemb1 * up1 + temb1, down2)
+        up2 = self.up1(cemb1 * up1 + temb1, down1)
 
         # DESIGN DECISION 3: set down1 to 0.
-        down1 = torch.zeros_like(up1)
+        down2 = torch.zeros_like(up2)
         # [b, f, w, h]
-        up3 = self.up2(cemb2 * up2 + temb2, down1)
+        up3 = self.up2(cemb2 * up2 + temb2, down2)
 
         # DESIGN DECISION 4: set x to 0.
         x = torch.zeros_like(up3)
@@ -132,6 +133,34 @@ class Unembed(nn.Module):
 
         self.load_state_dict(keep_dict)
         self.to(device)
+
+
+def huh(x, timestep):
+    beta1 = 1e-4
+    beta2 = 0.02
+    T = 500
+
+    beta_t = (beta2 - beta1) * torch.arange(
+        0, T + 1, dtype=torch.float32
+    ) / T + beta1
+    sqrt_beta_t = torch.sqrt(beta_t)
+    alpha_t = 1 - beta_t
+    log_alpha_t = torch.log(alpha_t)
+    alphabar_t = torch.cumsum(log_alpha_t, dim=0).exp()
+
+    oneover_sqrta = 1 / torch.sqrt(alpha_t)
+    sqrtmab = torch.sqrt(1 - alphabar_t)
+    mab_over_sqrtmab = (1 - alpha_t) / sqrtmab
+
+    size = (4, 28, 28)
+    device = "cuda:0"
+    z = torch.randn(x.shape[0], *size).to(device) if timestep > 1 else 0
+    x_i = torch.randn(x.shape[0], *size).to(device)
+
+    x_i = (
+        oneover_sqrta[timestep] * (x * mab_over_sqrtmab[timestep])
+    )
+    return x_i
 
 
 def main():
@@ -170,6 +199,7 @@ def main():
     unembed.init_weights(run_config["nn_model_path"], device)
 
     concepts = run_config["concepts"]
+    concepts = ["000", "001", "010"]
     _, acts = load_acts(run_config["activations_dir"], concepts, 1)
     bottleneck_samples = 16
     random_idx = 42
@@ -189,7 +219,7 @@ def main():
             ]
             .unsqueeze(-1)
             .unsqueeze(-1)
-        )
+        ).to(device)
 
         # shape = int(concept[0])
         # size = 2.6 if concept[2] == 0 else 1.6
@@ -202,6 +232,17 @@ def main():
         t_is = torch.tensor([timestep / n_T]).to(device)
         t_is = t_is.repeat(_acts.shape[0], 1, 1, 1)
         out = unembed(_acts, t_is)
+
+        zxcv = huh(out, timestep)
+        zxcv = zxcv.detach().cpu().numpy()
+
+        zxcv = np.clip(zxcv, 0, 1)
+        zxcv = np.transpose(zxcv, (0, 2, 3, 1))
+        fig, axes = plt.subplots(
+            ncols=4, nrows=1
+        )
+        axes[0].imshow(zxcv[0])
+        plt.savefig("zxcvzxcv.png")
 
         breakpoint()
         print("z")

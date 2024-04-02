@@ -15,7 +15,7 @@ def load_acts(acts_dir, concepts, t_index):
             acts = torch.load(
                 os.path.join(_act_dir, f"activations_{concept_label}.pt")
             )
-            acts = acts[:, 1::t_index, :]
+            #acts = acts[:, 1::t_index, :]
             if concept_label not in all_acts:
                 all_acts[concept_label] = acts
             else:

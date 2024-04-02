@@ -130,32 +130,14 @@ def learning_dynamics(
                     + "_00*.jpg"
                 )
             else:
-                if "astronaut" in dataset:
-                    if test_config == "11":
-                        template_path = ["Astronaut_Riding_a_Horse_(SDXL).jpg"]
-                    elif test_config == "10":
-                        template_path = [
-                            "../predict_performance/get_images/16108/8438.png"
-                        ]
-                    elif test_config == "01":
-                        template_path = [
-                            "../predict_performance/get_images/16104/6512.png"
-                        ]
-                    else:
-                        template_path = [
-                            "../predict_performance/get_images/16096/34.png"
-                        ]
-                else:
-                    # template_path = glob.glob('../image_generation/output/'+dataset+'/template/CLEVR_'+test_config+'_00*.png')
-                    template_path = glob.glob(
-                        "input/"
-                        + dataset
-                        + "/template/CLEVR_"
-                        + test_config
-                        + "_00*.png"
-                    )
-            if debug:
-                template_path = ["Astronaut_Riding_a_Horse_(SDXL).jpg"]
+                template_path = glob.glob(
+                    "input/"
+                    + dataset
+                    + "/template/CLEVR_"
+                    + test_config
+                    + "_00*.png"
+                )
+
             x_real = Image.open(template_path[0])
             x_real = tf(x_real).detach().numpy()
             img_path = (
@@ -164,12 +146,6 @@ def learning_dynamics(
             # x_gen = np.stack([np.load(img_path)["x_gen"][0]])
             x_gen = np.load(img_path)["x_gen"]
             x_gen = np.clip(x_gen, 0, 1)
-            # if not "astronaut" in dataset:
-            #    pred, acc = calc_acc(x_gen, test_config, classifier_linear)
-            #    loss = calc_loss(x_gen, test_config, classifier_linear)
-            #    accs[test_config].append(acc)
-            #    preds[test_config].append(pred)
-            #    losses[test_config].append(loss)
             x_gen = np.transpose(x_gen, (0, 2, 3, 1))
             x_gen_plot[test_config] = np.mean(x_gen, axis=0)
             x_real_plot[test_config] = np.transpose(x_real, (1, 2, 0))

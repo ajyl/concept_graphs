@@ -79,7 +79,7 @@ def main():
         "valid_every": 200,
         "probe_layer": "bottleneck",
         "probe_dir": os.path.join(ROOT_DIR, "probe_exps/probe_ckpts"),
-        "T_index_every": 10,
+        "T_index_every": 1,
         "dataset": "shapes",
     }
 
@@ -117,7 +117,8 @@ def main():
     probe = (
         torch.randn(
             n_feat * 2,
-            int(timesteps / t_index),
+            #int(timesteps / t_index),
+            timesteps,
             num_concepts,
             num_labels_per_concept,
             requires_grad=False,
@@ -134,7 +135,7 @@ def main():
     torch.manual_seed(42)
 
     n_epochs = 20
-    train_acts, valid_acts = load_acts(acts_dir, batch_size, concepts, t_index)
+    train_acts, valid_acts = load_acts(acts_dir, concepts, t_index)
 
     train_size = train_acts["000"].shape[0]
     valid_size = valid_acts["000"].shape[0]

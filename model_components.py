@@ -430,14 +430,14 @@ class ContextUnet(nn.Module):
             self.contextembed1 = nn.ModuleList(
                 [
                     EmbedFC(self.n_classes[iclass], self.n_out1)
-                    #nn.Linear(self.n_classes[iclass], self.n_out1, bias=False)
+                    # nn.Linear(self.n_classes[iclass], self.n_out1, bias=False)
                     for iclass in range(len(self.n_classes))
                 ]
             )
             self.contextembed2 = nn.ModuleList(
                 [
                     EmbedFC(self.n_classes[iclass], self.n_out2)
-                    #nn.Linear(self.n_classes[iclass], self.n_out2, bias=False)
+                    # nn.Linear(self.n_classes[iclass], self.n_out2, bias=False)
                     for iclass in range(len(self.n_classes))
                 ]
             )
@@ -456,7 +456,22 @@ class ContextUnet(nn.Module):
             nn.Conv2d(n_feat, self.in_channels, 3, 1, 1),
         )
 
-    def forward(self, x, context_label, t, context_mask=None, condition_concepts=None):
+    def forward(
+        self,
+        x,
+        context_label,
+        t,
+        context_mask=None,
+        condition_concepts=None,
+        average_concepts=None,
+        gamma=1,
+    ):
+        """
+        average_concepts:
+        {
+            concept_idx (int): List[possible values]
+        }
+        """
         # x is (noisy) image, c is context label, t is timestep,
         # x: [batch, channels, width(?), height(?)]
         x = self.init_conv(x)  # [batch, n_feat, width, height]
@@ -484,6 +499,9 @@ class ContextUnet(nn.Module):
             if condition_concepts is None:
                 condition_concepts = list(range(len(self.n_classes)))
 
+            if average_concepts is None:
+                average_concepts = {}
+
             for ic in condition_concepts:
                 tmpc = context_label[ic]
                 if tmpc.dtype == torch.int64:
@@ -497,6 +515,26 @@ class ContextUnet(nn.Module):
                 cemb2 += self.contextembed2[ic](tmpc).view(
                     -1, int(self.n_out2 / 1.0), 1, 1
                 )
+
+            for ic, concept_values in average_concepts.items():
+                if concept_values[0].dtype == torch.int64:
+                    breakpoint()
+
+                _avg_embs1 = 0
+                _avg_embs2 = 0
+                for _poss_value in concept_values:
+                    _avg_embs1 += self.contextembed1[ic](
+                        _poss_value.to(self.device)
+                    ).view(-1, int(self.n_out1 / 1.0), 1, 1)
+                    _avg_embs2 += self.contextembed2[ic](
+                        _poss_value.to(self.device)
+                    ).view(-1, int(self.n_out2 / 1.0), 1, 1)
+
+                _avg_embs1 = _avg_embs1 / len(concept_values)
+                _avg_embs2 = _avg_embs2 / len(concept_values)
+
+                cemb1 += _avg_embs1
+                cemb2 += _avg_embs2
 
         # [b, f, w/2, h/2]
         down1 = self.down1(x, temb, cemb) if self.text else self.down1(x)
@@ -513,12 +551,17 @@ class ContextUnet(nn.Module):
         up1 = self.up0(hiddenvec)
 
         # [b, f, w/2, h/2]
+        # cemb1: [1, 512, 1, 1]
+        # up1: [batch, 512, 7, 7]
+        down2 = gamma * down2
+
         up2 = (
             self.up1(up1, down2, temb, cemb)
             if self.text
             else self.up1(cemb1 * up1 + temb1, down2)
         )
 
+        down1 = gamma * down1
         # [b, f, w, h]
         up3 = (
             self.up2(up2, down1, temb, cemb)
