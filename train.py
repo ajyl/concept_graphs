@@ -27,8 +27,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp-name", type=str)
-parser.add_argument("--save-every", type=int, default=100)
-parser.add_argument("--save-ckpt-every", type=int, default=10)
+parser.add_argument("--sample-every", type=int, default=50)
+parser.add_argument("--save-ckpt-every", type=int, default=1)
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--text", action="store_true")
 parser.add_argument("--lrate", default=1e-4, type=float)
@@ -40,7 +40,7 @@ parser.add_argument("--batch_size", default=64, type=int)
 parser.add_argument("--n_T", default=500, type=int)
 parser.add_argument("--n_feat", default=256, type=int)
 parser.add_argument("--n_sample", default=64, type=int)
-parser.add_argument("--n_epoch", default=100, type=int)
+parser.add_argument("--n_epoch", default=200, type=int)
 parser.add_argument("--experiment", default="H32-train1", type=str)
 parser.add_argument("--remove_node", default="None", type=str)
 parser.add_argument("--type_attention", default="", type=str)
@@ -239,7 +239,6 @@ def training(args):
         )
 
     elif dataset.startswith("single-body_2d_3classes"):
-        breakpoint()
         train_dataset = shapes_dataset(
             args.text,
             transform=tf,
@@ -249,7 +248,6 @@ def training(args):
             alpha=alpha,
             remove_node=remove_node,
         )
-        raise RuntimeError("Not tested yet.")
 
     else:
         train_dataset = my_dataset(
@@ -285,7 +283,6 @@ def training(args):
             )
 
         elif dataset.startswith("single-body_2d_3classes"):
-            breakpoint()
             test_dataset = shapes_dataset(
                 args.text,
                 transform=tf,
@@ -294,7 +291,6 @@ def training(args):
                 training=False,
                 test_size=test_size,
             )
-            raise RuntimeError("Not tested yet.")
 
         else:
             test_dataset = my_dataset(
@@ -361,7 +357,7 @@ def training(args):
                 ckpt_filepath = os.path.join(ckpt_dir, f"epoch_{ep}.pt")
                 torch.save(ddpm.nn_model, ckpt_filepath)
 
-            if (ep + 1) % args.save_every == 0 or ep >= (n_epoch - 5):
+            if (ep + 1) % args.sample_every == 0 or ep >= (n_epoch - 5):
 
                 for test_config in output_configs:
                     x_real, c_gen = next(iter(test_dataloaders[test_config]))
@@ -378,7 +374,6 @@ def training(args):
                             n_sample,
                             c_gen,
                             (in_channels, pixel_size, pixel_size),
-                            device,
                             guide_w=0.0,
                         )
                     np.savez_compressed(

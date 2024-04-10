@@ -6,6 +6,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from fancy_einsum import einsum
 from einops import rearrange, repeat, pack, unpack
 from transformers import CLIPTokenizer, CLIPTextModel
 
@@ -345,6 +346,12 @@ class UnetUp(nn.Module):
         # x: [32, 512, 7, 7]
         # skip: [32, 512, 7, 7]
         x = torch.cat((x, skip), 1)
+
+        # only_skip = torch.cat((torch.zeros_like(skip), skip), 1)
+        # orig_output = self.model(x)
+        # output_without_skip = self.model(x_without_skip)
+        # output_without_x = self.model(only_skip)
+
         if self.text:
             return self.layers[-1](
                 self.layers[2](
@@ -465,6 +472,7 @@ class ContextUnet(nn.Module):
         condition_concepts=None,
         average_concepts=None,
         gamma=1,
+        timestep=None,
     ):
         """
         average_concepts:
@@ -496,12 +504,15 @@ class ContextUnet(nn.Module):
 
             cemb1 = 0
             cemb2 = 0
-            if condition_concepts is None:
-                condition_concepts = list(range(len(self.n_classes)))
-
             if average_concepts is None:
                 average_concepts = {}
 
+            if condition_concepts is None:
+                condition_concepts = list(range(len(self.n_classes)))
+
+            condition_concepts = [
+                x for x in condition_concepts if x not in average_concepts
+            ]
             for ic in condition_concepts:
                 tmpc = context_label[ic]
                 if tmpc.dtype == torch.int64:
@@ -509,12 +520,116 @@ class ContextUnet(nn.Module):
                         tmpc, num_classes=self.n_classes[ic]
                     ).type(torch.float)
 
-                cemb1 += self.contextembed1[ic](tmpc).view(
+                _cemb1 = self.contextembed1[ic](tmpc).view(
                     -1, int(self.n_out1 / 1.0), 1, 1
                 )
-                cemb2 += self.contextembed2[ic](tmpc).view(
+
+                if (
+                    ic == 1
+                    and timestep is not None
+                    and timestep < 50
+                ):
+                    print("HACK1")
+                    shape_embed_0 = self.contextembed1[0](
+                        F.one_hot(
+                            context_label[0], num_classes=self.n_classes[0]
+                        ).type(torch.float)
+                    )
+                    shape_embed_1 = self.contextembed1[0](
+                        F.one_hot(
+                            torch.tensor([1]).to("cuda:0"),
+                            num_classes=self.n_classes[0],
+                        ).type(torch.float)
+                    )
+
+                    size_embed_0 = self.contextembed1[2](
+                        torch.tensor([2.6]).to("cuda:0")
+                    )
+                    size_embed_1 = self.contextembed1[2](
+                        torch.tensor([1.6]).to("cuda:0")
+                    )
+
+                    for _comp in [
+                        shape_embed_0,
+                        shape_embed_1,
+                        size_embed_0,
+                        size_embed_1,
+                    ]:
+
+                        _comp_normalized = (
+                            _comp.squeeze() / _comp.squeeze().norm()
+                        )
+                        top = torch.dot(
+                            _cemb1.squeeze(),
+                            _comp_normalized.squeeze(),
+                        )
+                        bottom = torch.dot(
+                            _comp_normalized.squeeze(),
+                            _comp_normalized.squeeze(),
+                        )
+                        concept_comp = (top / bottom) * _comp_normalized
+                        _cemb1 = _cemb1 - concept_comp.unsqueeze(0).unsqueeze(
+                            -1
+                        ).unsqueeze(-1)
+
+                    _cemb1 = _cemb1 * 6
+                cemb1 = cemb1 + _cemb1
+
+                _cemb2 = self.contextembed2[ic](tmpc).view(
                     -1, int(self.n_out2 / 1.0), 1, 1
                 )
+
+                if (
+                    ic == 1
+                    and timestep is not None
+                    and timestep < 50
+                ):
+                    print("HACK2")
+                    shape_embed_0 = self.contextembed2[0](
+                        F.one_hot(
+                            context_label[0], num_classes=self.n_classes[0]
+                        ).type(torch.float)
+                    )
+                    shape_embed_1 = self.contextembed2[0](
+                        F.one_hot(
+                            torch.tensor([1]).to("cuda:0"),
+                            num_classes=self.n_classes[0],
+                        ).type(torch.float)
+                    )
+
+                    size_embed_0 = self.contextembed2[2](
+                        torch.tensor([2.6]).to("cuda:0")
+                    )
+                    size_embed_1 = self.contextembed2[2](
+                        torch.tensor([1.6]).to("cuda:0")
+                    )
+
+                    for _comp in [
+                        shape_embed_0,
+                        shape_embed_1,
+                        size_embed_0,
+                        size_embed_1,
+                    ]:
+
+                        _comp_normalized = (
+                            _comp.squeeze() / _comp.squeeze().norm()
+                        )
+                        top = torch.dot(
+                            _cemb2.squeeze(),
+                            _comp_normalized.squeeze(),
+                        )
+                        bottom = torch.dot(
+                            _comp_normalized.squeeze(),
+                            _comp_normalized.squeeze(),
+                        )
+                        concept_comp = (top / bottom) * _comp_normalized
+                        _cemb2 = _cemb2 - concept_comp.unsqueeze(0).unsqueeze(
+                            -1
+                        ).unsqueeze(-1)
+
+                    _cemb2 = _cemb2 * 6
+
+                cemb2 = cemb2 + _cemb2
 
             for ic, concept_values in average_concepts.items():
                 if concept_values[0].dtype == torch.int64:
@@ -555,19 +670,20 @@ class ContextUnet(nn.Module):
         # up1: [batch, 512, 7, 7]
         down2 = gamma * down2
 
-        up2 = (
-            self.up1(up1, down2, temb, cemb)
-            if self.text
-            else self.up1(cemb1 * up1 + temb1, down2)
-        )
+        if self.text:
+            up2 = self.up1(up1, down2, temb, cemb)
+        else:
+            up2 = self.up1(cemb1 * up1 + temb1, down2)
 
         down1 = gamma * down1
-        # [b, f, w, h]
-        up3 = (
-            self.up2(up2, down1, temb, cemb)
-            if self.text
-            else self.up2(cemb2 * up2 + temb2, down1)
-        )
+
+        if self.text:
+            # [b, f, w, h]
+            up3, up3_w_zeroed_out_skip_ = self.up2(up2, down1, temb, cemb)
+        else:
+            # [b, f, w, h]
+            up3 = self.up2(cemb2 * up2 + temb2, down1)
+
         # [b, channel, w, h]
         out = self.out(torch.cat((up3, x), 1))
         return out

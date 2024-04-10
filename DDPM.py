@@ -91,31 +91,32 @@ class DDPM(nn.Module):
         n_sample,
         c_gen,
         size,
-        device,
         guide_w=0.0,
         condition_concepts=None,
         average_concepts=None,
     ):
 
         x_i = torch.randn(n_sample, *size).to(
-            device
+            self.device
         )  # x_T ~ N(0, 1), sample initial noise
 
         _c_gen = (
             c_gen[:n_sample]
             if self.text
             else [
-                tmpc_gen[:n_sample].to(device) for tmpc_gen in c_gen.values()
+                tmpc_gen[:n_sample].to(self.device)
+                for tmpc_gen in c_gen.values()
             ]
         )
 
         x_i_store = []
+        x_i_store_testing = []
         for i in range(self.n_T, 0, -1):
             print(f"sampling timestep {i}", end="\r")
-            t_is = torch.tensor([i / self.n_T]).to(device)
+            t_is = torch.tensor([i / self.n_T]).to(self.device)
             t_is = t_is.repeat(n_sample, 1, 1, 1)
 
-            z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
+            z = torch.randn(n_sample, *size).to(self.device) if i > 1 else 0
             eps = self.nn_model(
                 x_i,
                 _c_gen,
@@ -131,4 +132,5 @@ class DDPM(nn.Module):
                 x_i_store.append(x_i.detach().cpu().numpy())
 
         x_i_store = np.array(x_i_store)
+
         return x_i, x_i_store
